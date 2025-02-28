@@ -8,7 +8,7 @@ const facebookRoutesphotoV1 = require('./routes/facebookAPIphotoV1'); // Import 
 const facebookRoutesvideo = require('./routes/facebookAPIvideo'); // Import the route
 const facebookRoutesvideo2 = require('./routes/facebookAPIvideo2'); // Import the route
 const facebookRoutesvideoV1 = require('./routes/facebookAPIvideoV1'); // Import the route
-
+const getposts = require('./routes/getpostAPI'); // Import the route
 // Enable CORS
 app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
@@ -93,7 +93,7 @@ app.use('/', facebookRoutesphotoV1); // Mount the routes at the root path
 app.use('/', facebookRoutesvideo); // Mount the routes at the root path
 app.use('/', facebookRoutesvideo2); // Mount the routes at the root path
 app.use('/', facebookRoutesvideoV1); // Mount the routes at the root path
-
+app.use('/', getposts ); // Mount the routes at the root path
 // Start the server
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
