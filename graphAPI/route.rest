@@ -1,0 +1,229 @@
+###
+//get all in table
+GET http://localhost:5000/posts
+
+
+
+
+
+###
+//to test the authentication API Register user
+POST http://localhost:4000/api/signup
+Content-Type: application/json
+
+{  
+  
+    "email":"okonta.christian@gmail.com" ,
+    "password":"okonta.christian.com",
+      "userName":"okonta.chris",
+    "firstName":"okonta.christian",
+    "lastName":"okonta.christian"
+   
+ }
+
+ 
+###
+//to test the singin
+POST http://localhost:4000/api/login
+Content-Type: application/json
+
+ {  
+     "userName":"345ytrwfdas",
+     "password":"111111"
+ }
+
+
+
+
+
+###
+//to get single user by id
+GET http://localhost:8080/api/userprofile/62a66049b369cccdf5a0f6ed
+
+
+###
+//to get single user by id
+GET http://localhost:8080/api/user-profile/62ce99b5489d38ac35320c94
+
+
+
+
+
+###
+//to get single user by username
+GET http://localhost:8080/api/userNameprofile
+Content-Type: application/json
+
+ {  
+   "userName":"okonta"
+ }
+
+
+
+
+###
+//to test the  Register campaign type
+POST http://localhost:4000/campaignType/register
+Content-Type: application/json
+
+{  
+  
+    "campaignName":"ULTRA-MAX" ,
+    "campaignPrice":70000,
+      "campaignCoverage":"GOOGLE ADs"
+   
+   
+ }
+
+
+
+###
+//to get single campaign type by campainName
+GET http://localhost:4000/campaignType/campaignName
+Content-Type: application/json
+
+ {  
+   "campaignName":"SOCIAL",
+    "campaignPrice":100000,
+     "campaignCoverage":"okonchris"
+ }
+
+
+
+
+
+
+###
+//to get single campaign type by campainName
+GET http://localhost:8080/campaignType/campaignName/SOCIAL
+
+
+
+
+###
+//update by campaignName
+PATCH  http://localhost:4000/campaignType/update/SOCcer
+Content-Type: application/json
+
+{  
+      "campaignName":"ULTRA",
+       "campaignPrice":50000,
+     "campaignCoverage":"TWITTER"
+    }
+
+###
+//get all users
+GET http://localhost:4000/campaignType/ALL
+
+
+###
+//get all post
+GET http://localhost:8080/post2/ALL
+
+
+###
+//get single post by ID
+GET http://localhost:8080/post/single/62e551acb3a240be9465676b
+
+
+###
+//get all post by ID
+GET http://localhost:8080/post/ALL/62ce99b5489d38ac35320c94
+
+###
+//get single users post
+GET http://localhost:8080/post/profile/dell
+
+###
+//get all users
+GET http://localhost:3000/all
+
+
+
+###
+//update by id
+PATCH  http://localhost:3000/update-user/626569598bc8c9a296ee77ef
+Content-Type: application/json
+
+{  
+    "name":"Makkinsen"
+   
+   }
+
+
+
+
+###
+//get by username
+GET    http://localhost:3000/pprofile/username
+Content-Type: application/json
+
+{  
+    "username":"emmansusel"
+    }
+
+
+
+
+
+
+###
+//update by username
+PATCH    http://localhost:4000/api/signup
+Content-Type: application/json
+
+{  
+    "username":"okonta.christian@yahoo.com"
+    }
+
+localhost:3000/api/signup
+
+
+###
+   //DELETE A CUSTOMER
+DELETE  http://localhost:9000/auth/delete-user/1
+
+
+###
+//WALLET SECTION
+//to get single user by id
+GET http://localhost:8080/transaction/pay
+
+
+###
+//to get single user by id
+GET http://localhost:8080/transaction/wallet/balance/62a66049b369cccdf5a0f6ed
+
+
+
+###
+//to test the  Register campaign type
+POST http://localhost:8080/postAI/request
+Content-Type: application/json
+
+{  
+  
+    "campaignName":"ULTRA-MAX" ,
+    "campaignPrice":70000,
+      "campaignCoverage":"GOOGLE ADs"
+   
+   
+ }
+
+
+
+
+
+ ###
+//to get single user by id
+GET http://localhost:8080/8080/postAI/request
+
+
+
+
+###
+//to get single user by id
+GET http://localhost:8080/postAI/request
+
+
+
