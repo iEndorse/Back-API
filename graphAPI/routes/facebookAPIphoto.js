@@ -8,8 +8,15 @@ const path = require('path');
 const router = express.Router();
 
 // Load environment variables
+
+
+
 const accessToken = process.env.ACCESS_TOKEN;
 const pageId = process.env.PAGE_ID;
+ // Use the variables in your route logic
+ if (!accessToken || !pageId) {
+    return res.status(500).json({ error: 'Missing required environment variables' });
+  }
 
 // Multer setup for file uploads
 const storage = multer.diskStorage({
@@ -39,6 +46,8 @@ router.post('/upload-photo', upload.single('photo'), async (req, res) => {
         const response = await axios.post(url, formData, {
             headers: { ...formData.getHeaders() },
         });
+
+        console.log(accessToken)
 // Log the final form data (before making the API request)
 console.log('FormData:', formData);
         fs.unlinkSync(req.file.path);

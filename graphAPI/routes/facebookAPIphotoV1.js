@@ -51,6 +51,7 @@ async function createPost(postData) {
 
 // Endpoint to upload a photo to a Facebook page
 router.post('/upload-photoV1', upload.single('photo'), async (req, res) => {
+    
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded.' });
     }

@@ -23,42 +23,57 @@ app.use(express.urlencoded({ extended: true }));
 // Configure the AWS SDK
 AWS.config.update({
   region: 'us-east-1',
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Required for all types of testing
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+
 });
 
 const ssm = new AWS.SSM();
 
 async function getAccessToken() {
-  const params = {
+  const param1 = {
     Name: '/iEndorse/Production/AccessToken',
+    WithDecryption: true,
+  };
+  const param2 = {
+    Name: '/iEndorse/Production/secretAccessKey',
     WithDecryption: true,
   };
 
   try {
-    const data = await ssm.getParameter(params).promise();
-    console.log("Successfully retrieved from Parameter Store")
-    return data.Parameter.Value;
+    const data1 = await ssm.getParameter(param1).promise();
+    const data2 = await ssm.getParameter(param2).promise();
+    console.log("Successfully retrieved from Parameter Store");
+    
+    // The issue was here - only the first return statement was being executed
+    // Return both values as an object instead
+    return {
+      accessToken: data1.Parameter.Value,
+      secretAccessKey: data2.Parameter.Value
+    };
   } catch (err) {
     console.error('Error retrieving access token from SSM:', err);
     throw err; // Re-throw the error to be caught later
   }
 }
 
-// Load the Access Token
+// Load the Tokens
 let accessToken = null;
+let secretAccessKey = null;
 
 // Initialize and Refresh the token
 async function initializeAccessToken() {
-    try {
-        accessToken = await getAccessToken();
-        console.log('Access Token Retrieved during initialization:', accessToken); // Add for verification
-    } catch (error) {
-        console.error('Failed to retrieve access token during initialization, shutting down:', error);
-        process.exit(1); // Exit the application if it fails to load the token
-    }
+  try {
+    // Update to handle the new returned object structure
+    const credentials = await getAccessToken();
+    accessToken = credentials.accessToken;
+    secretAccessKey = credentials.secretAccessKey;
+    
+    console.log('Access Token Retrieved during initialization:', accessToken);
+    console.log('Secret Access Key Retrieved during initialization:', secretAccessKey);
+  } catch (error) {
+    console.error('Failed to retrieve access token during initialization, shutting down:', error);
+    process.exit(1); // Exit the application if it fails to load the token
+  }
 }
-
 // Call the function to initialize, to set up and load the keys at the top scope
 initializeAccessToken();
 
@@ -79,6 +94,7 @@ app.get('/', (req, res) => {
   res.send(`Hello World!  Access Token: ${accessToken}, Page ID: ${process.env.PAGE_ID}`);
 });
 
+
 // Middleware to inject accessToken
 app.use((req, res, next) => {
     if (!accessToken) {
@@ -94,7 +110,14 @@ app.use('/', facebookRoutesvideo); // Mount the routes at the root path
 app.use('/', facebookRoutesvideo2); // Mount the routes at the root path
 app.use('/', facebookRoutesvideoV1); // Mount the routes at the root path
 app.use('/', getposts ); // Mount the routes at the root path
+
+
+
+// Pass them to the router
+app.use('/facebook', facebookRouter({ accessToken, pageId }));
 // Start the server
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
+
+
