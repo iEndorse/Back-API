@@ -9,8 +9,10 @@ const { v4: uuidv4 } = require('uuid'); // For generating unique IDs - npm insta
 const router = express.Router(); // Create a router instance
 
 // Load environment variables
-const accessToken = process.env.ACCESS_TOKEN;
+//const accessToken = process.env.ACCESS_TOKEN;
 const pageId = process.env.PAGE_ID;
+
+
 
 // Multer setup
 const storage = multer.diskStorage({
@@ -57,7 +59,8 @@ router.post('/upload-photoV1', upload.single('photo'), async (req, res) => {
     }
 
     let photo_id;
-
+    const accessToken = req.accessToken;
+    console.log("access", accessToken);
     try {
         // Extract all fields from req.body
         const photoTitle = req.body.title || '';
@@ -90,7 +93,7 @@ ${campaignTargetAudienceAnswer}
         });
 
         // Log the final form data (before making the API request)
-        //   console.log('FormData:', formData);
+         // console.log('FormData:', formData);
 
         if (response.status !== 200) {
             console.error('Facebook API error:', response.data);

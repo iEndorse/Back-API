@@ -9,6 +9,9 @@ const facebookRoutesvideo = require('./routes/facebookAPIvideo'); // Import the 
 const facebookRoutesvideo2 = require('./routes/facebookAPIvideo2'); // Import the route
 const facebookRoutesvideoV1 = require('./routes/facebookAPIvideoV1'); // Import the route
 const getposts = require('./routes/getpostAPI'); // Import the route
+const sql = require('mssql');
+const iendorseRoutes = require('./routes/endorse');
+
 // Enable CORS
 app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
@@ -16,14 +19,13 @@ app.use(function (req, res, next) {
     next();
 });
 
-// Middleware (Important:  Body parsing BEFORE routes)
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Middleware (Important: Body parsing BEFORE routes)
+app.use(express.urlencoded({ extended: true })); // For form data
+app.use(express.json()); // For JSON data
 
 // Configure the AWS SDK
 AWS.config.update({
   region: 'us-east-1',
-
 });
 
 const ssm = new AWS.SSM();
@@ -37,17 +39,21 @@ async function getAccessToken() {
     Name: '/iEndorse/Production/secretAccessKey',
     WithDecryption: true,
   };
+  const param3 = {
+    Name: '/iEndorse/Production/sqlpassword',
+    WithDecryption: true,
+  };
 
   try {
     const data1 = await ssm.getParameter(param1).promise();
     const data2 = await ssm.getParameter(param2).promise();
+    const data3 = await ssm.getParameter(param3).promise();
     console.log("Successfully retrieved from Parameter Store");
     
-    // The issue was here - only the first return statement was being executed
-    // Return both values as an object instead
     return {
       accessToken: data1.Parameter.Value,
-      secretAccessKey: data2.Parameter.Value
+      secretAccessKey: data2.Parameter.Value,
+      sqlpassword: data3.Parameter.Value
     };
   } catch (err) {
     console.error('Error retrieving access token from SSM:', err);
@@ -58,6 +64,7 @@ async function getAccessToken() {
 // Load the Tokens
 let accessToken = null;
 let secretAccessKey = null;
+let sqlpassword = null;
 
 // Initialize and Refresh the token
 async function initializeAccessToken() {
@@ -66,34 +73,36 @@ async function initializeAccessToken() {
     const credentials = await getAccessToken();
     accessToken = credentials.accessToken;
     secretAccessKey = credentials.secretAccessKey;
+    sqlpassword = credentials.sqlpassword;
     
     console.log('Access Token Retrieved during initialization:', accessToken);
     console.log('Secret Access Key Retrieved during initialization:', secretAccessKey);
+    console.log('SQL DB password Key Retrieved during initialization:', sqlpassword);
   } catch (error) {
     console.error('Failed to retrieve access token during initialization, shutting down:', error);
     process.exit(1); // Exit the application if it fails to load the token
   }
 }
-// Call the function to initialize, to set up and load the keys at the top scope
-initializeAccessToken();
 
 // Set interval to check the token every 10 minutes (600000 ms)
 setInterval(async () => {
     try {
-        accessToken = await getAccessToken();
-        console.log('Access Token Refreshed:', accessToken);
+        const credentials = await getAccessToken();
+        accessToken = credentials.accessToken;
+        secretAccessKey = credentials.secretAccessKey;
+        sqlpassword = credentials.sqlpassword;
+        console.log('Credentials Refreshed');
     } catch (error) {
-        console.error('Failed to refresh access token:', error);
+        console.error('Failed to refresh credentials:', error);
     }
-}, 600000);
+}, 60000000);
 
 app.get('/', (req, res) => {
   if (!accessToken) {
     return res.status(500).send('Application failed to initialize: Access Token missing.');
   }
-  res.send(`Hello World!  Access Token: ${accessToken}, Page ID: ${process.env.PAGE_ID}`);
+  res.send(`Hello World! Access Token: ${accessToken}, Page ID: ${process.env.PAGE_ID}`);
 });
-
 
 // Middleware to inject accessToken
 app.use((req, res, next) => {
@@ -104,20 +113,74 @@ app.use((req, res, next) => {
     next();
 });
 
-// Use the Facebook API routes
-app.use('/', facebookRoutesphotoV1); // Mount the routes at the root path
-app.use('/', facebookRoutesvideo); // Mount the routes at the root path
-app.use('/', facebookRoutesvideo2); // Mount the routes at the root path
-app.use('/', facebookRoutesvideoV1); // Mount the routes at the root path
-app.use('/', getposts ); // Mount the routes at the root path
-
-
-
-// Pass them to the router
-app.use('/facebook', facebookRouter({ accessToken, pageId }));
-// Start the server
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+// Database configuration function to always get the latest credentials
+const getDbConfig = () => ({
+  server: 'db5680.public.databaseasp.net',
+  database: 'db5680',
+  user: 'db5680',
+  password: sqlpassword,
+  options: {
+    encrypt: false,
+    trustServerCertificate: true,
+    enableArithAbort: true
+  }
 });
 
+// Connect to database after initialization
+async function connectToDatabase() {
+  // Make sure we have the credentials first
+  await initializeAccessToken();
+  
+  const pool = new sql.ConnectionPool(getDbConfig());
+  
+  try {
+    await pool.connect();
+    console.log('Connected to SQL Server database');
+    return pool;
+  } catch (err) {
+    console.error('Database connection failed:', err);
+    throw err;
+  }
+}
 
+// Define the routes
+app.use('/', facebookRoutesphotoV1);
+app.use('/', facebookRoutesvideo);
+app.use('/', facebookRoutesvideo2);
+app.use('/', facebookRoutesvideoV1);
+app.use('/', getposts);
+app.use('/', iendorseRoutes);
+
+// Basic route (Note: this is defined twice in your original code)
+app.get('/', (req, res) => {
+  res.send('API is running');
+});
+
+// Initialize the database and start the server
+connectToDatabase()
+  .then(pool => {
+    // Make the pool available to routes
+    app.locals.db = pool;
+    
+    // Start the server
+    app.listen(port, () => {
+      console.log(`Server running on port ${port}`);
+    });
+  })
+  .catch(err => {
+    console.error('Failed to initialize database connection:', err);
+    process.exit(1);
+  });
+
+// Handle application shutdown
+process.on('SIGINT', async () => {
+  if (app.locals.db) {
+    try {
+      await app.locals.db.close();
+      console.log('Database connection closed');
+    } catch (err) {
+      console.error('Error closing database connection:', err);
+    }
+  }
+  process.exit(0);
+});

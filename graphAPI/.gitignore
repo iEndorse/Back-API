@@ -2,7 +2,7 @@ node_modules/         # Ignore the entire node_modules directory
 uploads/              # Ignore the uploads directory (where uploaded files are stored)
 .env                  # Ignore the .env file (where your environment variables will be stored)
 /dist                # If you are using TypeScript or have a dist folder.
-.env
+
 .env.local
 config/credentials.json
 **/secrets/*
