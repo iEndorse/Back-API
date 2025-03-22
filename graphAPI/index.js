@@ -3,7 +3,7 @@ const cors = require('cors');
 const express = require('express');
 const app = express();
 const AWS = require('aws-sdk');
-const port = 5000;
+const port =process.env.port || 4000;
 const facebookRoutesphotoV1 = require('./routes/facebookAPIphotoV1'); // Import the route
 const facebookRoutesvideo = require('./routes/facebookAPIvideo'); // Import the route
 const facebookRoutesvideo2 = require('./routes/facebookAPIvideo2'); // Import the route
@@ -24,10 +24,12 @@ app.use(express.urlencoded({ extended: true })); // For form data
 app.use(express.json()); // For JSON data
 
 // Configure the AWS SDK
+// Configure the AWS SDK
 AWS.config.update({
   region: 'us-east-1',
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Required for all types of testing
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
 });
-
 const ssm = new AWS.SSM();
 
 async function getAccessToken() {
