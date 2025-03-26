@@ -4,14 +4,11 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
-// Load environment variables
-const accessToken = process.env.ACCESS_TOKEN;
-const pageId = process.env.PAGE_ID;
-
-// Multer setup for file uploads
+// Multer setup for video upload
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, 'uploads/');
@@ -20,24 +17,72 @@ const storage = multer.diskStorage({
         cb(null, file.originalname);
     }
 });
-const upload = multer({ storage: storage });
+
+const upload = multer({ 
+    storage: storage,
+    fileFilter: (req, file, cb) => {
+        // Add video file type validation
+        const allowedTypes = ['video/mp4', 'video/mpeg', 'video/quicktime'];
+        if (allowedTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Invalid video file type. Only MP4, MPEG, and QuickTime videos are allowed.'));
+        }
+    },
+    limits: {
+        fileSize: 1024 * 1024 * 1024 // 1GB file size limit
+    }
+});
+
+// DynamoDB setup (same as photo upload)
+const AWS = require('aws-sdk');
+AWS.config.update({
+    region: 'us-east-1',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+});
+const dynamoDB = new AWS.DynamoDB.DocumentClient();
+const TABLE_NAME = 'FacebookPosts';
+
+async function createPost(postData) {
+    const params = {
+        TableName: TABLE_NAME,
+        Item: postData,
+    };
+
+    try {
+        await dynamoDB.put(params).promise();
+        console.log('Post created successfully.');
+    } catch (error) {
+        console.error('Error creating post:', error);
+        throw error;
+    }
+}
 
 // Endpoint to upload a video to a Facebook page
 router.post('/upload-videoV1', upload.single('video'), async (req, res) => {
     if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded.' });
+        return res.status(400).json({ error: 'No video file uploaded.' });
     }
+
+    let video_id;
+    const accessToken = req.accessToken;
+    const pageId = process.env.PAGE_ID;
 
     try {
         // Extract all fields from req.body
-        const videoTitle = req.body.title || 'Default Video Title';
-        const videoDescription = req.body.description || 'Default Video Description';
+        const videoTitle = req.body.title || '';
+        const videoDescription = req.body.description || '';
         const campaignTitle = req.body.campaignTitle || '';
         const campaignLink = req.body.campaignLink || 'https://www.iendorse.ng/';
-        const campaignTargetAudienceAnswer = req.body.campaignTargetAudienceAnswer || '#iEndorse'; //treat as plain text
+        const campaignTargetAudienceAnswer = req.body.campaignTargetAudienceAnswer || '#iEndorse';
 
-        // Construct the full description string
-        let fullDescription = `
+        // Create postId and timestamp
+        const postId = uuidv4();
+        const timestamp = Date.now();
+
+        // Construct the message string
+        const message = `
 ${videoTitle}
 ${videoDescription}
 ${campaignTitle}
@@ -45,25 +90,55 @@ ${campaignLink}
 ${campaignTargetAudienceAnswer}
 `;
 
-        const url = `https://graph.facebook.com/v19.0/${pageId}/videos`;
         const formData = new FormData();
         formData.append('access_token', accessToken);
         formData.append('file', fs.createReadStream(req.file.path));
-        formData.append('description', fullDescription); // Combined information
+        formData.append('description', message);
 
+        // Use video upload endpoint
+        const url = `https://graph.facebook.com/v19.0/${pageId}/videos`;
         const response = await axios.post(url, formData, {
-            headers: { ...formData.getHeaders() },
+            headers: { 
+                ...formData.getHeaders(),
+                'Content-Type': 'multipart/form-data'
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
         });
 
-        fs.unlinkSync(req.file.path);
+        if (response.status !== 200) {
+            console.error('Facebook API error:', response.data);
+            return res.status(500).json({ error: 'Facebook API error' });
+        }
 
-        return res.status(200).json({ id: response.data.id, message: 'Video uploaded successfully.' });
+        video_id = response.data.id;
+
+        // Store video information in DynamoDB
+        const postData = {
+            pageId: pageId,
+            timestamp: timestamp,
+            postId: postId,
+            videoId: video_id,
+            type: 'video',
+            videoTitle: videoTitle,
+            videoDescription: videoDescription,
+            campaignTitle: campaignTitle,
+            campaignLink: campaignLink,
+            campaignTargetAudienceAnswer: campaignTargetAudienceAnswer,
+            message: message
+        };
+
+        await createPost(postData);
+
+        return res.status(200).json({ id: video_id, message: 'Video uploaded successfully.' });
+
     } catch (error) {
         console.error('Error uploading video:', error.response ? error.response.data : error.message);
-        if (req.file && req.file.path) {
-            fs.unlinkSync(req.file.path); // Ensure file exists before unlinking
-        }
         return res.status(500).json({ error: 'Failed to upload video to Facebook.' });
+    } finally {
+        if (req.file && req.file.path) {
+            fs.unlinkSync(req.file.path);
+        }
     }
 });
 
