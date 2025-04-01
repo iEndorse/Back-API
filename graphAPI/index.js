@@ -11,6 +11,7 @@ const facebookRoutesvideoV1 = require('./routes/facebookAPIvideoV1'); // Import 
 const getposts = require('./routes/getpostAPI'); // Import the route
 const sql = require('mssql');
 const iendorseRoutes = require('./routes/endorse');
+const iendorseV1 = require('./routes/endorseV1');;
 
 // Enable CORS
 app.use(function (req, res, next) {
@@ -152,6 +153,7 @@ app.use('/', facebookRoutesvideo2);
 app.use('/', facebookRoutesvideoV1);
 app.use('/', getposts);
 app.use('/', iendorseRoutes);
+app.use('/', iendorseV1);
 
 // Basic route (Note: this is defined twice in your original code)
 app.get('/', (req, res) => {

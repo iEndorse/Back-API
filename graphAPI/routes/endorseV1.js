@@ -43,6 +43,114 @@ async function createPost(postData) {
     }
 }
 
+async function updatePostBudget(campaignId, additionalUnits) {
+    // Query for existing post with the campaign ID
+    const queryParams = {
+        TableName: TABLE_NAME,
+        IndexName: 'CampaignIdIndex', // Assuming you have a GSI for campaignId
+        KeyConditionExpression: 'campaignId = :campaignId',
+        ExpressionAttributeValues: {
+            ':campaignId': campaignId
+        }
+    };
+
+    try {
+        const result = await dynamoDB.query(queryParams).promise();
+        
+        if (result.Items && result.Items.length > 0) {
+            // Found existing post, update the budget
+            const post = result.Items[0];
+            const currentBudget = post.boostBudget || 0;
+            const newBudget = currentBudget + additionalUnits;
+            
+            // Update the item with new budget
+            const updateParams = {
+                TableName: TABLE_NAME,
+                Key: {
+                    postId: post.postId,
+                    timestamp: post.timestamp
+                },
+                UpdateExpression: 'set boostBudget = :budget, numberOfUnits = :units',
+                ExpressionAttributeValues: {
+                    ':budget': newBudget,
+                    ':units': (post.numberOfUnits || 0) + additionalUnits
+                },
+                ReturnValues: 'UPDATED_NEW'
+            };
+            
+            const updateResult = await dynamoDB.update(updateParams).promise();
+            console.log('Post budget updated successfully:', updateResult);
+            return { existingPost: post, newBudget: newBudget };
+        }
+        
+        return null; // No existing post found
+    } catch (error) {
+        console.error('Error updating post budget:', error);
+        throw error;
+    }
+}
+
+async function findExistingPost(campaignId) {
+    // Query for existing post with the campaign ID
+    const queryParams = {
+        TableName: TABLE_NAME,
+        IndexName: 'CampaignIdIndex', // Assuming you have a GSI for campaignId
+        KeyConditionExpression: 'campaignId = :campaignId',
+        ExpressionAttributeValues: {
+            ':campaignId': campaignId
+        }
+    };
+
+    try {
+        const result = await dynamoDB.query(queryParams).promise();
+        
+        if (result.Items && result.Items.length > 0) {
+            return result.Items[0]; // Return the existing post
+        }
+        
+        return null; // No existing post found
+    } catch (error) {
+        console.error('Error finding existing post:', error);
+        throw error;
+    }
+}
+
+async function boostFacebookPost(mediaId, budget, accessToken) {
+    try {
+        // Boost parameters
+        const boostData = {
+            budget: budget,
+            duration: 3, // Duration in days
+            targeting: {
+                geo_locations: {
+                    countries: ['NG'] // Target Nigeria
+                },
+                age_min: 18,
+                age_max: 65
+            }
+        };
+        
+        // Send boost request to Facebook API
+        const url = `https://graph.facebook.com/v19.0/${mediaId}/promotions`;
+        
+        const response = await axios.post(url, {
+            access_token: accessToken,
+            ...boostData
+        });
+        
+        if (response.status !== 200) {
+            console.error('Facebook Boost API error:', response.data);
+            throw new Error('Facebook Boost API error');
+        }
+        
+        console.log('Post boost success:', response.data);
+        return response.data;
+    } catch (error) {
+        console.error('Error boosting post:', error);
+        throw new Error(`Failed to boost post: ${error.message}`);
+    }
+}
+
 // Function to download file if it's at a remote URL
 async function downloadFileIfNeeded(filePath) {
     if (!filePath) {
@@ -91,12 +199,7 @@ async function downloadFileIfNeeded(filePath) {
 // Set up multer for handling form-data
 const upload = multer(); // No storage configuration for non-file fields
 
-//router.post('/endorse-photo', upload.none(), async (req, res) => {
-    // Log the request body
-   // router.post('/endorse-photo', async (req, res) => { 
-
-
-router.post('/endorse-campaign', upload.none(), async (req, res) => {
+router.post('/endorse-campaignV1', upload.none(), async (req, res) => {
     console.log('================= NEW REQUEST =================');
     console.log('Request body type:', typeof req.body);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
@@ -134,12 +237,11 @@ router.post('/endorse-campaign', upload.none(), async (req, res) => {
 
     try {
         // Extract other data
-        const numberOfUnits = req.body.numberOfUnits || req.query.numberOfUnits;
+        const numberOfUnits = parseInt(req.body.numberOfUnits || req.query.numberOfUnits, 10) || 1;
         const endorsementNote = req.body.endorsementNote || req.query.endorsementNote;
         
         console.log("Extracted campaignId:", campaignId);
         
-  
         // Validate required fields
         if (!campaignId) {
             return res.status(400).json({ 
@@ -156,6 +258,47 @@ router.post('/endorse-campaign', upload.none(), async (req, res) => {
 
         console.log("Using campaignId:", campaignId);
         console.log("Using numberOfUnits:", numberOfUnits);
+        
+        // Check if access token is available
+        if (!accessToken) {
+            return res.status(400).json({ error: 'Facebook access token is required.' });
+        }
+
+        // Check if the campaign has already been endorsed/posted
+        const existingPost = await findExistingPost(campaignId);
+        
+        if (existingPost) {
+            console.log("Campaign already endorsed, updating boost budget");
+            
+            // Update the budget with the new units
+            const updateResult = await updatePostBudget(campaignId, numberOfUnits);
+
+            // this is where we assign actual currency to unit
+            
+            // Boost the existing post with the new budget
+            try {
+                const boostResult = await boostFacebookPost(
+                    existingPost.mediaId, 
+                    numberOfUnits * 1, // Assuming 100 per unit
+                    accessToken
+                );
+                
+                return res.status(200).json({
+                    success: true,
+                    id: existingPost.mediaId,
+                    message: 'Campaign boost updated successfully.',
+                    boostResult: boostResult,
+                    newBudget: updateResult.newBudget
+                });
+            } catch (boostError) {
+                console.error('Error boosting existing post:', boostError);
+                return res.status(500).json({
+                    error: 'Failed to boost existing post.',
+                    details: boostError.message,
+                    postUpdated: true
+                });
+            }
+        }
 
         // Get the database connection pool
         if (!req.app || !req.app.locals || !req.app.locals.db) {
@@ -270,17 +413,15 @@ router.post('/endorse-campaign', upload.none(), async (req, res) => {
 
             // Construct the message for Facebook
             const message = `
-${photoTitle}
+
+${campaignTitle}
+
 ${photoDescription}
-${endorsementText}${campaignTitle}
+${endorsementText}
 ${campaignLink}
+
 ${campaignTargetAudienceAnswer}
             `;
-
-            // Check if we have a valid access token
-            if (!accessToken) {
-                return res.status(400).json({ error: 'Facebook access token is required.' });
-            }
 
             // Prepare form data for Facebook API
             const formData = new FormData();
@@ -291,9 +432,9 @@ ${campaignTargetAudienceAnswer}
             // Determine the appropriate Facebook endpoint based on file type
             let url;
             if (isVideo) {
-                url = `https://graph.facebook.com/v19.0/${pageId}/videos`;
+                url = `https://graph.facebook.com/v22.0/${pageId}/videos`;
             } else {
-                url = `https://graph.facebook.com/v19.0/${pageId}/photos`;
+                url = `https://graph.facebook.com/v22.0/${pageId}/photos`;
             }
 
             console.log("Posting to Facebook URL:", url);
@@ -320,6 +461,7 @@ ${campaignTargetAudienceAnswer}
                 timestamp: timestamp,
                 postId: postId,
                 mediaId: mediaId,
+                campaignId: campaignId, // Add campaignId for indexing
                 type: isVideo ? 'video' : 'image',
                 photoTitle: photoTitle,
                 photoDescription: photoDescription,
@@ -327,17 +469,27 @@ ${campaignTargetAudienceAnswer}
                 campaignLink: campaignLink,
                 campaignTargetAudienceAnswer: campaignTargetAudienceAnswer,
                 endorsementNote: endorsementNote || '',
-                numberOfUnits: numberOfUnits || 0,
+                numberOfUnits: numberOfUnits,
+                boostBudget: numberOfUnits * 1, // Store boost budget based on units
                 campaignFilePath: campaignFilePath || null,
                 message: message
             };
 
-
-              
-
-            
-
             await createPost(postData);
+
+            // Now boost the post
+            let boostResult;
+            try {
+                boostResult = await boostFacebookPost(
+                    mediaId, 
+                    numberOfUnits * 1, // Convert units to currency (e.g., 100 per unit)
+                    accessToken
+                );
+            } catch (boostError) {
+                console.error('Error boosting new post:', boostError);
+                // We'll still return success for the post, but include the boost error
+                boostResult = { error: boostError.message };
+            }
 
             // Clean up if we created a temporary file
             if (fileToUpload.startsWith('temp/') && fs.existsSync(fileToUpload)) {
@@ -348,7 +500,8 @@ ${campaignTargetAudienceAnswer}
                 success: true,
                 id: mediaId,
                 message: 'Endorsement posted successfully to Facebook.',
-                campaign: campaign
+                campaign: campaign,
+                boost: boostResult
             });
             
         } catch (fileError) {
