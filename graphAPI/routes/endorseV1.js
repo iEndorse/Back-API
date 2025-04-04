@@ -17,6 +17,7 @@ router.use(express.urlencoded({ extended: true }));
 
 // Load environment variables
 const pageId = process.env.PAGE_ID;
+const adAccountId = process.env.AD_ACCOUNT_ID;
 
 // DynamoDB setup
 const AWS = require('aws-sdk');
@@ -115,11 +116,13 @@ async function findExistingPost(campaignId) {
     }
 }
 
-async function boostFacebookPost(mediaId, budget, accessToken) {
+async function boostFacebookPost(mediaId, budget, accessToken, adAccountId) {
     try {
         // Boost parameters
         const boostData = {
             budget: budget,
+            currency: 'NGN',
+            ad_account_id: `act_${adAccountId}`,
             duration: 3, // Duration in days
             targeting: {
                 geo_locations: {
@@ -133,9 +136,11 @@ async function boostFacebookPost(mediaId, budget, accessToken) {
         // Send boost request to Facebook API
         const url = `https://graph.facebook.com/v19.0/${mediaId}/promotions`;
         
-        const response = await axios.post(url, {
-            access_token: accessToken,
-            ...boostData
+        const response = await axios.post(url, null, {
+            params: {
+                access_token: accessToken,
+                ...boostData
+            }
         });
         
         if (response.status !== 200) {
@@ -235,6 +240,10 @@ router.post('/endorse-campaignV1', upload.none(), async (req, res) => {
     const accessToken = req.accessToken || req.body.accessToken || req.query.accessToken;
     console.log("Access token present:", !!accessToken);
 
+    // Get ad account ID from request or environment variable
+    const requestAdAccountId = req.body.adAccountId || req.query.adAccountId;
+    const effectiveAdAccountId = requestAdAccountId || adAccountId;
+
     try {
         // Extract other data
         const numberOfUnits = parseInt(req.body.numberOfUnits || req.query.numberOfUnits, 10) || 1;
@@ -256,8 +265,13 @@ router.post('/endorse-campaignV1', upload.none(), async (req, res) => {
             return res.status(400).json({ error: 'Facebook Page ID is required.' });
         }
 
+        if (!effectiveAdAccountId) {
+            return res.status(400).json({ error: 'Facebook Ad Account ID is required.' });
+        }
+
         console.log("Using campaignId:", campaignId);
         console.log("Using numberOfUnits:", numberOfUnits);
+        console.log("Using adAccountId:", effectiveAdAccountId);
         
         // Check if access token is available
         if (!accessToken) {
@@ -279,8 +293,9 @@ router.post('/endorse-campaignV1', upload.none(), async (req, res) => {
             try {
                 const boostResult = await boostFacebookPost(
                     existingPost.mediaId, 
-                    numberOfUnits * 1, // Assuming 100 per unit
-                    accessToken
+                    numberOfUnits * 1, // Assuming 1 per unit
+                    accessToken,
+                    effectiveAdAccountId
                 );
                 
                 return res.status(200).json({
@@ -482,8 +497,9 @@ ${campaignTargetAudienceAnswer}
             try {
                 boostResult = await boostFacebookPost(
                     mediaId, 
-                    numberOfUnits * 1, // Convert units to currency (e.g., 100 per unit)
-                    accessToken
+                    numberOfUnits * 1, // Convert units to currency (e.g., 1 per unit)
+                    accessToken,
+                    effectiveAdAccountId
                 );
             } catch (boostError) {
                 console.error('Error boosting new post:', boostError);
