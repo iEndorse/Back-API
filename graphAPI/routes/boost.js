@@ -83,12 +83,14 @@ async function createFacebookAdForPost(config) {
         console.log(`Ad Campaign Created: ID = ${campaignId}`);
 
         // --- 2. Create Ad Set ---
+       
+
         console.log("Creating Ad Set...");
         const now = new Date();
         const startTime = now.toISOString();
         const endTime = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString();
         const lifetimeBudget = Math.round(budget * 100); // Budget in cents
-
+        console.log("Budget  :",  lifetimeBudget)
         const adSetData = {
             name: `Ad Set for Post ${postId}`,
             campaign_id: campaignId,
@@ -378,7 +380,7 @@ router.post('/boost-campaign', upload.none(), async (req, res) => { // upload.no
         // --- 6. Create Facebook Ad (using the new function) ---
         let adResult = null;
         const budgetAmount = numberOfUnits * 100; // Example: 1 unit = 100 NGN? Adjust multiplier as needed!
-        const adDurationDays = 3; // Or make this dynamic
+        const adDurationDays = 1; // Or make this dynamic
 
         try {
             adResult = await createFacebookAdForPost({
