@@ -181,11 +181,7 @@ async function createVideoFromImages(imagePaths, outputVideoPath, duration = 50)
                 '-vsync cfr', // Use Constant Frame Rate sync. Might help timing.
                 `-t ${duration}`, // Keep the total duration target
                 '-pix_fmt yuv420p',
-                `-r ${outputFps}`, // Set output frame rate
-
-                  // --- ADD THESE QUALITY OPTIONS ---
-                  '-crf 10',                              // Constant Rate Factor (Lower = Higher Quality, 18 is high)
-                  '-preset slow'                          // Encoding preset (Slower = Better Compression/Quality)
+                `-r ${outputFps}` // Set output frame rate
             ])
             .output(outputVideoPath)
             .on('start', (commandLine) => {
@@ -327,126 +323,41 @@ router.post('/social-campaign', upload.none(), async (req, res) => {
         }
 
 
-        // *** ADD THIS ENTIRE FUNCTION ***
-/**
- * Converts an image file to a temporary PNG file with even dimensions.
- */
-async function convertImageToPng(inputPath, outputPngPath) {
-    return new Promise((resolve, reject) => {
-        console.log(`Converting ${inputPath} to standardized PNG at ${outputPngPath}`);
-        ffmpeg(inputPath)
-            .outputOptions([
-                '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2', // Scale to even dimensions
-                '-pix_fmt rgb24' // Use lossless RGB for intermediate PNG
-            ])
-            .output(outputPngPath)
-            .on('end', () => {
-                console.log(`Successfully converted ${inputPath} to ${outputPngPath}`);
-                resolve(outputPngPath);
-            })
-            .on('error', (err, stdout, stderr) => {
-                console.error(`Error converting ${inputPath} to PNG:`, err.message);
-                console.error('FFmpeg stdout:', stdout);
-                console.error('FFmpeg stderr:', stderr);
-                reject(new Error(`Failed to convert ${inputPath} to PNG: ${err.message}\nStderr: ${stderr}`));
-            })
-            .run();
-    });
-}
-// *** END OF FUNCTION TO ADD ***
-
         // Check file types and decide action
-                // Check file types and decide action
-                const allImages = downloadedFilePaths.length > 0 && fileTypes.every(type => type.includes('image') || type.includes('jpg') || type.includes('jpeg') || type.includes('png'));
-                const singleVideo = downloadedFilePaths.length === 1 && (fileTypes[0].includes('video') || fileTypes[0].includes('mp4') || fileTypes[0].includes('mov'));
-                const singleImage = downloadedFilePaths.length === 1 && !singleVideo && allImages; // Check it's an image if only one file
-        
-        
-                if (downloadedFilePaths.length > 1 && allImages) {
-                    // --- Combine multiple images into video --- // <--- START OF BLOCK TO MODIFY
-                    console.log("Multiple images found. Attempting to combine into a video."); // <--- Keep this line
-        
-                    // vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-                    // REPLACE the original ffmpeg call block below...
-                    /*
-                    const outputVideoFilename = `campaign_${campaignId}_${uuidv4()}.mp4`;
-                    const outputVideoPath = path.join(TEMP_DIR, outputVideoFilename);
-                    tempFilesToDelete.push(outputVideoPath); // Mark generated video for cleanup
-        
-                    try {
-                        finalMediaToUploadPath = await createVideoFromImages(downloadedFilePaths, outputVideoPath, 50); // 50 seconds duration
-                        isVideoPost = true;
-                        console.log(`Video generated successfully at ${finalMediaToUploadPath}`);
-                    } catch (ffmpegError) {
-                        console.error("FFmpeg video creation failed:", ffmpegError);
-                        throw new Error(`Failed to create video from images: ${ffmpegError.message}`);
-                    }
-                    */
-                    // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        
-                    // vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-                    // ...WITH THIS NEW LOGIC (Pre-conversion + Combining):
-        
-                    // --- Pre-convert multiple images to PNG ---
-                    console.log("Pre-converting images to standardized PNG format."); // Added clarity
-                    const convertedPngPaths = []; // Store paths to the newly created PNGs
-                    try {
-                        const conversionPromises = downloadedFilePaths.map(async (originalTempPath, index) => {
-                            const convertedPngFilename = `converted_${campaignId}_${index}_${uuidv4()}.png`;
-                            const convertedPngPath = path.join(TEMP_DIR, convertedPngFilename);
-                            // Call the new helper function to convert the temp file
-                            await convertImageToPng(originalTempPath, convertedPngPath);
-                            tempFilesToDelete.push(convertedPngPath); // Mark converted PNG for cleanup
-                            convertedPngPaths.push(convertedPngPath); // Add path to the list for video creation
-                            return convertedPngPath;
-                        });
-                        await Promise.all(conversionPromises); // Wait for all conversions
-                        console.log(`Successfully converted ${convertedPngPaths.length} images to temporary PNGs.`);
-        
-                         // Ensure we actually have paths to work with after conversion attempt
-                         if (convertedPngPaths.length === 0) {
-                             throw new Error("No images were successfully converted for video creation.");
-                         }
-        
-                    } catch (conversionError) {
-                         console.error('Error during image conversion phase:', conversionError);
-                         throw new Error(`Failed to convert one or more images to PNG: ${conversionError.message}`);
-                    }
-        
-                    // --- Combine Converted PNGs into Video ---
-                     console.log("Attempting to combine standardized PNG images into a video.");
-                     const outputVideoFilename = `campaign_${campaignId}_${uuidv4()}.mp4`;
-                     const outputVideoPath = path.join(TEMP_DIR, outputVideoFilename);
-                     tempFilesToDelete.push(outputVideoPath); // Mark final video for cleanup
-        
-                     try {
-                         // Pass the paths of the *converted PNGs* to the video creation function
-                         finalMediaToUploadPath = await createVideoFromImages(convertedPngPaths, outputVideoPath, 20);
-                         isVideoPost = true; // The result is always a video in this branch
-                         console.log(`Video generated successfully from PNGs at ${finalMediaToUploadPath}`);
-                     } catch (ffmpegError) {
-                         console.error("FFmpeg video creation failed:", ffmpegError.message);
-                         // Throw the detailed error from the rejection
-                         throw new Error(`Failed to create video from images: ${ffmpegError.message}`);
-                     }
-                    // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    // END OF NEW LOGIC
-        
-                } else if (singleVideo) { // <--- Keep this block and subsequent 'else if'/'else' blocks as they are
-                    // --- Use the single downloaded video ---
-                    console.log("Single video file found.");
-                    finalMediaToUploadPath = downloadedFilePaths[0];
-                    isVideoPost = true;
-        
-                } else if (singleImage) {
-                    // --- Use the single downloaded image ---
-                     console.log("Single image file found.");
-                     finalMediaToUploadPath = downloadedFilePaths[0];
-                     isVideoPost = false; // Post as photo
-        
-                } // ... and so on for the rest of the function ...
+        const allImages = downloadedFilePaths.length > 0 && fileTypes.every(type => type.includes('image') || type.includes('jpg') || type.includes('jpeg') || type.includes('png'));
+        const singleVideo = downloadedFilePaths.length === 1 && (fileTypes[0].includes('video') || fileTypes[0].includes('mp4') || fileTypes[0].includes('mov'));
+        const singleImage = downloadedFilePaths.length === 1 && !singleVideo && allImages; // Check it's an image if only one file
 
-        else if (downloadedFilePaths.length > 0) {
+
+        if (downloadedFilePaths.length > 1 && allImages) {
+            // --- Combine multiple images into video ---
+            console.log("Multiple images found. Attempting to combine into a video.");
+            const outputVideoFilename = `campaign_${campaignId}_${uuidv4()}.mp4`;
+            const outputVideoPath = path.join(TEMP_DIR, outputVideoFilename);
+            tempFilesToDelete.push(outputVideoPath); // Mark generated video for cleanup
+
+            try {
+                finalMediaToUploadPath = await createVideoFromImages(downloadedFilePaths, outputVideoPath, 50); // 50 seconds duration
+                isVideoPost = true;
+                console.log(`Video generated successfully at ${finalMediaToUploadPath}`);
+            } catch (ffmpegError) {
+                console.error("FFmpeg video creation failed:", ffmpegError);
+                throw new Error(`Failed to create video from images: ${ffmpegError.message}`);
+            }
+
+        } else if (singleVideo) {
+            // --- Use the single downloaded video ---
+            console.log("Single video file found.");
+            finalMediaToUploadPath = downloadedFilePaths[0];
+            isVideoPost = true;
+
+        } else if (singleImage) {
+            // --- Use the single downloaded image ---
+             console.log("Single image file found.");
+             finalMediaToUploadPath = downloadedFilePaths[0];
+             isVideoPost = false; // Post as photo
+
+        } else if (downloadedFilePaths.length > 0) {
              // --- Handle mixed types or multiple videos (fallback) ---
              console.warn("Multiple files found, but not all are images or it's multiple videos. Using the first file.");
              // Fallback: use the first file found. Determine if it's video or image.
