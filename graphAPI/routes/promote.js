@@ -15,6 +15,7 @@ const sql = require('mssql');
 const router = express.Router();
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg'); // Import fluent-ffmpeg
+ffmpeg.setFfmpegPath('/usr/bin/ffmpeg'); // Set the absolute path
 
 // Add body parser middleware to this specific router
 router.use(express.json());
