@@ -477,7 +477,7 @@ async function convertImageToPng(inputPath, outputPngPath) {
 
         const formData = new FormData();
         formData.append('access_token', accessToken);
-        formData.append('message', message);
+        formData.append('description', message);
         // Use 'source' for videos, 'source' or 'file' for photos (let's use 'source' for consistency)
         formData.append('source', fs.createReadStream(finalMediaToUploadPath));
 
