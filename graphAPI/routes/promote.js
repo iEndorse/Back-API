@@ -1,4 +1,9 @@
-// routes/iendorse.js
+// // This route handles the conversion of images to videos and posting them to Facebook.
+// It uses FFmpeg to create videos from images and stores post information in DynamoDB.
+// It also handles file downloads, error handling, and cleanup of temporary files.
+// It is designed to be used with an Express.js application and requires AWS SDK, Axios, and FFmpeg libraries.
+// It is a part of a larger application that manages social media campaigns and endorsements.
+
 
 const express = require('express');
 const axios = require('axios');
@@ -184,7 +189,7 @@ async function createVideoFromImages(imagePaths, outputVideoPath, duration = 50)
                 `-r ${outputFps}`, // Set output frame rate
 
                   // --- ADD THESE QUALITY OPTIONS ---
-                  '-crf 10',                              // Constant Rate Factor (Lower = Higher Quality, 18 is high)
+                  '-crf 0',                              // Constant Rate Factor (Lower = Higher Quality, 18 is high)
                   '-preset slow'                          // Encoding preset (Slower = Better Compression/Quality)
             ])
             .output(outputVideoPath)
@@ -226,7 +231,7 @@ function safeUnlink(filePath) {
 // Endpoint to handle endorsement and post to Facebook page
 const upload = multer(); // No storage configuration needed
 
-router.post('/social-campaign', upload.none(), async (req, res) => {
+router.post('/promote-campaign', upload.none(), async (req, res) => {
     console.log('================= NEW REQUEST (endorse-campaign) =================');
     console.log('Node.js process PATH:', process.env.PATH);
     console.log('Request body:', JSON.stringify(req.body, null, 2)); // Log parsed body if available
@@ -507,7 +512,7 @@ async function convertImageToPng(inputPath, outputPngPath) {
 
         // --- Step 5: Store post information in DynamoDB ---
         const postId = uuidv4();
-        const timestamp = new Date().toISOString(); // Use ISO string for DynamoDB sort key
+        const timestamp = Date.now(); // Use ISO string for DynamoDB sort key
 
         const postData = {
             pageId: pageId,

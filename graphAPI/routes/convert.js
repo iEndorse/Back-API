@@ -1,4 +1,8 @@
-// routes/iendorse.js
+// This route handles the conversion of images to videos and posting them to Facebook.
+// It uses FFmpeg to create videos from images and stores post information in DynamoDB.
+// It also handles file downloads, error handling, and cleanup of temporary files.
+// It is designed to be used with an Express.js application and requires AWS SDK, Axios, and FFmpeg libraries.
+// It is a part of a larger application that manages social media campaigns and endorsements.
 
 const express = require('express');
 const axios = require('axios');
