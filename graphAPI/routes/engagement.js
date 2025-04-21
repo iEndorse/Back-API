@@ -2,26 +2,29 @@ const express = require('express');
 const puppeteer = require('puppeteer');
 const sql = require('mssql');
 const multer = require('multer');
-const upload = multer(); // This stores in memory; for file uploads you can customize this
-
+const upload = multer(); // Stores form-data in memory
 
 const router = express.Router();
 
-// Parse K/M counts like "3.5K" or "1.2M"
+// Utility to parse shorthand numbers like "1.2K", "3.5M"
 function parseCount(text) {
   if (!text) return 0;
   const match = text.replace(/,/g, '').match(/^([\d.]+)([KM]?)$/i);
   if (!match) return parseInt(text);
   const num = parseFloat(match[1]);
   const suffix = match[2].toUpperCase();
-  return Math.round(suffix === 'K' ? num * 1000 : suffix === 'M' ? num * 1000000 : num);
+  return Math.round(suffix === 'K' ? num * 1_000 : suffix === 'M' ? num * 1_000_000 : num);
 }
 
-// Scraper
+// Engagement scraper using Puppeteer
 async function scrapeEngagement(postUrl) {
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    // Do NOT set executablePath — allow Puppeteer to use its bundled Chromium
+  });
 
+  const page = await browser.newPage();
   let data = {
     platform: '',
     postUrl,
@@ -33,7 +36,6 @@ async function scrapeEngagement(postUrl) {
 
   try {
     await page.goto(postUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
     const bodyText = await page.evaluate(() => document.body.innerText);
 
     if (postUrl.includes('tiktok.com')) {
@@ -44,27 +46,26 @@ async function scrapeEngagement(postUrl) {
       data.shares = parseCount(await page.$eval('[data-e2e="share-count"]', el => el.innerText));
     } else if (postUrl.includes('facebook.com')) {
       data.platform = 'Facebook';
-      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+likes?/i)?.[1] || '0');
-      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+comments?/i)?.[1] || '0');
-      data.shares = parseCount(bodyText.match(/([\d,.]+)\s+shares?/i)?.[1] || '0');
+      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+likes?/i)?.[1]);
+      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+comments?/i)?.[1]);
+      data.shares = parseCount(bodyText.match(/([\d,.]+)\s+shares?/i)?.[1]);
     } else if (postUrl.includes('instagram.com')) {
       data.platform = 'Instagram';
-      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+likes?/i)?.[1] || '0');
-      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+comments?/i)?.[1] || '0');
+      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+likes?/i)?.[1]);
+      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+comments?/i)?.[1]);
     } else if (postUrl.includes('linkedin.com')) {
       data.platform = 'LinkedIn';
-      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+reactions?/i)?.[1] || '0');
-      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+comments?/i)?.[1] || '0');
+      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+reactions?/i)?.[1]);
+      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+comments?/i)?.[1]);
     } else if (postUrl.includes('twitter.com') || postUrl.includes('x.com')) {
       data.platform = 'Twitter';
-      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+likes?/i)?.[1] || '0');
-      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+replies?/i)?.[1] || '0');
-      data.shares = parseCount(bodyText.match(/([\d,.]+)\s+retweets?/i)?.[1] || '0');
-      data.views = parseCount(bodyText.match(/([\d,.]+)\s+views?/i)?.[1] || '0');
+      data.likes = parseCount(bodyText.match(/([\d,.]+)\s+likes?/i)?.[1]);
+      data.comments = parseCount(bodyText.match(/([\d,.]+)\s+replies?/i)?.[1]);
+      data.shares = parseCount(bodyText.match(/([\d,.]+)\s+retweets?/i)?.[1]);
+      data.views = parseCount(bodyText.match(/([\d,.]+)\s+views?/i)?.[1]);
     }
 
     return data;
-
   } catch (err) {
     console.error('[SCRAPE ERROR]', err.message);
     return null;
@@ -73,7 +74,7 @@ async function scrapeEngagement(postUrl) {
   }
 }
 
-// Insert into DB using the shared connection pool
+// Save scraped data to MSSQL
 async function insertEngagement(pool, data) {
   try {
     await pool.request()
@@ -93,38 +94,28 @@ async function insertEngagement(pool, data) {
   }
 }
 
-// POST /engagement
-
-
-
-    // POST endpoint to handle multipart/form-data
+// POST route to scrape and save engagement metrics
 router.post('/engagement', upload.none(), async (req, res) => {
+  console.log('================= NEW REQUEST =================');
+  console.log('Request body:', JSON.stringify(req.body, null, 2));
+
   const { postUrl, campaignId } = req.body;
 
-    console.log('================= NEW REQUEST =================');
-    console.log('Request body type:', typeof req.body);
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
-    console.log('Request headers:', req.headers);
-    console.log('Request params:', req.params);
-    console.log('Request query:', req.query);
-    if (!postUrl) return res.status(400).json({ error: 'postUrl is required check' });
-     
-    if (!postUrl) return res.status(400).json({ error: 'postUrl is required' });
-  
-    const pool = req.app.locals.db;
-    if (!pool) return res.status(500).json({ error: 'Database connection not available' });
-  
-    try {
-      const data = await scrapeEngagement(postUrl);
-      if (!data) return res.status(500).json({ error: 'Scraping failed' });
-  
-      await insertEngagement(pool, data);
-      res.json(data);
-    } catch (err) {
-      console.error('[ENGAGEMENT ERROR]', err.message);
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
-  
+  if (!postUrl) return res.status(400).json({ error: 'postUrl is required' });
+
+  const pool = req.app.locals.db;
+  if (!pool) return res.status(500).json({ error: 'Database connection not available' });
+
+  try {
+    const data = await scrapeEngagement(postUrl);
+    if (!data) return res.status(500).json({ error: 'Scraping failed' });
+
+    await insertEngagement(pool, data);
+    res.json(data);
+  } catch (err) {
+    console.error('[ENGAGEMENT ERROR]', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 module.exports = router;
