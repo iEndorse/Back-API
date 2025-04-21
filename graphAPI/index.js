@@ -14,6 +14,7 @@ const iendorseRoutes = require('./routes/endorse');
 const iendorseV1 = require('./routes/endorseV1');
 const boost = require('./routes/boost');
 const promoteRoutes = require('./routes/promote');
+const engagementRoutes = require('./routes/engagement');
 // Enable CORS
 app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
@@ -157,6 +158,7 @@ app.use('/', iendorseRoutes);
 app.use('/', iendorseV1);
 app.use('/', boost);
 app.use('/', promoteRoutes);
+app.use('/', engagementRoutes);
 
 // Basic route (Note: this is defined twice in your original code)
 app.get('/', (req, res) => {
