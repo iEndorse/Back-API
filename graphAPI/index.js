@@ -15,6 +15,10 @@ const iendorseV1 = require('./routes/endorseV1');
 const boost = require('./routes/boost');
 const promoteRoutes = require('./routes/promote');
 const engagementRoutes = require('./routes/engagement');
+const imageTextRoutes = require('./routes/imagetext'); // Import the route
+const ocrRoutes = require('./routes/ocrRoutes');
+//const ocrazureRoutes = require('./routes/ocrAzureRoutes'); // Import the route
+const openaiRoutes = require('./routes/ocr-ai'); // Import the route
 // Enable CORS
 app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
@@ -159,6 +163,10 @@ app.use('/', iendorseV1);
 app.use('/', boost);
 app.use('/', promoteRoutes);
 app.use('/', engagementRoutes);
+app.use('/', imageTextRoutes); // Use the image text route
+app.use('/', ocrRoutes);
+//app.use('/', ocrazureRoutes); // Use the OCR Azure route
+app.use('/', openaiRoutes); // Use the OpenAI route
 
 // Basic route (Note: this is defined twice in your original code)
 app.get('/', (req, res) => {
