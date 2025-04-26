@@ -3,6 +3,7 @@ const cors = require('cors');
 const express = require('express');
 const app = express();
 const AWS = require('aws-sdk');
+const { OpenAI } = require('openai');
 const port =process.env.port || 4000;
 const facebookRoutesphotoV1 = require('./routes/facebookAPIphotoV1'); // Import the route
 const facebookRoutesvideo = require('./routes/facebookAPIvideo'); // Import the route
@@ -17,8 +18,8 @@ const promoteRoutes = require('./routes/promote');
 const engagementRoutes = require('./routes/engagement');
 const imageTextRoutes = require('./routes/imagetext'); // Import the route
 const ocrRoutes = require('./routes/ocrRoutes');
-//const ocrazureRoutes = require('./routes/ocrAzureRoutes'); // Import the route
-const openaiRoutes = require('./routes/ocr-ai'); // Import the route
+const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js'); // Import the route
+//const openaiRoutes = require('./routes/ocr-ai'); // Import the route
 // Enable CORS
 app.use(function (req, res, next) {
     res.header("Access-Control-Allow-Origin", "*");
@@ -52,17 +53,23 @@ async function getAccessToken() {
     Name: '/iEndorse/Production/sqlpassword',
     WithDecryption: true,
   };
+  const param4 = {
+    Name: '/iEndorse/Production/OPENAI_API_KEY',
+    WithDecryption: true,
+  };
 
   try {
     const data1 = await ssm.getParameter(param1).promise();
     const data2 = await ssm.getParameter(param2).promise();
     const data3 = await ssm.getParameter(param3).promise();
+    const data4 = await ssm.getParameter(param4).promise();
     console.log("Successfully retrieved from Parameter Store");
     
     return {
       accessToken: data1.Parameter.Value,
       secretAccessKey: data2.Parameter.Value,
-      sqlpassword: data3.Parameter.Value
+      sqlpassword: data3.Parameter.Value,
+      openai_api_key: data4.Parameter.Value
     };
   } catch (err) {
     console.error('Error retrieving access token from SSM:', err);
@@ -74,6 +81,7 @@ async function getAccessToken() {
 let accessToken = null;
 let secretAccessKey = null;
 let sqlpassword = null;
+let openai_api_key = null;
 
 // Initialize and Refresh the token
 async function initializeAccessToken() {
@@ -83,10 +91,12 @@ async function initializeAccessToken() {
     accessToken = credentials.accessToken;
     secretAccessKey = credentials.secretAccessKey;
     sqlpassword = credentials.sqlpassword;
+    openai_api_key = credentials.openai_api_key;
     
     console.log('Access Token Retrieved during initialization:', accessToken);
     console.log('Secret Access Key Retrieved during initialization:', secretAccessKey);
     console.log('SQL DB password Key Retrieved during initialization:', sqlpassword);
+    console.log('OpenAI API Key Retrieved during initialization:', openai_api_key);
   } catch (error) {
     console.error('Failed to retrieve access token during initialization, shutting down:', error);
     process.exit(1); // Exit the application if it fails to load the token
@@ -100,6 +110,7 @@ setInterval(async () => {
         accessToken = credentials.accessToken;
         secretAccessKey = credentials.secretAccessKey;
         sqlpassword = credentials.sqlpassword;
+        openai_api_key = credentials.OPENAI_API_KEY;
         console.log('Credentials Refreshed');
     } catch (error) {
         console.error('Failed to refresh credentials:', error);
@@ -119,6 +130,7 @@ app.use((req, res, next) => {
         return res.status(500).send('Application failed to initialize: Access Token missing.');
     }
     req.accessToken = accessToken;
+    req.openai_api_key = openai_api_key;
     next();
 });
 
@@ -165,8 +177,8 @@ app.use('/', promoteRoutes);
 app.use('/', engagementRoutes);
 app.use('/', imageTextRoutes); // Use the image text route
 app.use('/', ocrRoutes);
-//app.use('/', ocrazureRoutes); // Use the OCR Azure route
-app.use('/', openaiRoutes); // Use the OpenAI route
+app.use('/', ocropenaiRoutes); // Use the OCR Azure route
+//app.use('/', openaiRoutes); // Use the OpenAI route
 
 // Basic route (Note: this is defined twice in your original code)
 app.get('/', (req, res) => {
