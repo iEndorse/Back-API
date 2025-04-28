@@ -40,7 +40,7 @@ if (!fs.existsSync(uploadsDir)) {
 const upload = multer({ dest: uploadsDir });
 
 // POST route
-router.post('/openaiImage', upload.single('image'), async (req, res) => {
+router.post('/readPoints', upload.single('image'), async (req, res) => {
   try {
     const OPENAI_API_KEY = req.openai_api_key;
     console.log(OPENAI_API_KEY);
