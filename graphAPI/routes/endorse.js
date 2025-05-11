@@ -172,7 +172,7 @@ router.post('/endorse-campaign', upload.none(), async (req, res) => {
                 c.CampaignTitle,
                 c.Description AS CampaignDescription,
                 c.CampaignUnit,
-                c.CampaignUnitUsed,
+            
                 c.CampaignLink,
                 cat.CategoryName AS CampaignCategory,
                 a.FullName AS CampaignOwnerName,

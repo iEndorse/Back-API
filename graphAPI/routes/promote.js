@@ -274,7 +274,7 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
         const campaignInfoQuery = `
             SELECT
                 c.Id AS CampaignId, c.CampaignTitle, c.Description AS CampaignDescription,
-                c.CampaignUnit, c.CampaignUnitUsed, c.CampaignLink,
+                c.CampaignUnit, c.CampaignLink,
                 cat.CategoryName AS CampaignCategory, a.FullName AS CampaignOwnerName,
                 a.EmailAddress AS CampaignOwnerEmail
             FROM Campaigns AS c
