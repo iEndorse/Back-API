@@ -31,6 +31,28 @@ function extractPlatformFromUrl(url) {
 }
 // --- End of Platform Extractor ---
 
+// --- Utility: Calculate Total Points ---
+function calculateTotalPoints(data) {
+  // Convert all metrics to numbers, using 0 if not available or not a number
+  const reactions = isNaN(Number(data.reactions)) ? 0 : Number(data.reactions);
+  const comments = isNaN(Number(data.comments)) ? 0 : Number(data.comments);
+  const shares = isNaN(Number(data.shares)) ? 0 : Number(data.shares);
+  const views = isNaN(Number(data.views)) ? 0 : Number(data.views);
+  const saves = isNaN(Number(data.saves)) ? 0 : Number(data.saves);
+  
+  // Calculate total points - you can adjust the weights based on your requirements
+  // Here's a simple example where each metric contributes differently to the total
+  const totalPoints = (
+    reactions * 1 +    // Each reaction is worth 1 point
+    comments * 2 +     // Each comment is worth 2 points
+    shares * 3 +       // Each share is worth 3 points
+    Math.floor(views / 100) +  // Every 100 views is worth 1 point
+    saves * 2          // Each save is worth 2 points
+  );
+  
+  return totalPoints;
+}
+
 // Set up uploads directory
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -107,7 +129,7 @@ If a value is not visible, write "unknown".`,
     } catch (jsonError) {
       console.error('Error parsing JSON from OpenAI response:', jsonError);
       console.log('Raw response:', reply);
-      return res.status(500).json({ error: 'Failed to parse metrics from image analysis.' });
+      return res.status(500).json({ error: 'Unable to read insights from the screenshot, please upload a clear screenshot from your post to claim points.' });
     }
 
     // Database part
@@ -125,6 +147,10 @@ If a value is not visible, write "unknown".`,
       return res.status(400).json({ error: 'Post URL is required' });
     }
 
+// Calculate total points from the scraped data
+    const totalPoints = calculateTotalPoints(scrapedData);
+
+
     const dataToInsert = {
       ...scrapedData,
       platform: scrapedData.platform || extractPlatformFromUrl(postUrl),
@@ -132,6 +158,7 @@ If a value is not visible, write "unknown".`,
       scrapedAt: new Date(),
       campaignId: campaignId,
       accountId: accountId,
+      totalPoints: totalPoints  // Add the calculated total points
     };
 
     await insertEngagement(pool, dataToInsert);
@@ -161,6 +188,7 @@ async function insertEngagement(pool, data) {
   const scrapedAt = data.scrapedAt ? new Date(data.scrapedAt) : new Date();
   const campaignId = data.campaignId || null;
   const accountId = data.accountId || null;
+  const totalPoints = isNaN(Number(data.totalPoints)) ? 0 : Number(data.totalPoints);
 
   if (!postUrl) {
     console.error('[SQL ERROR] Cannot insert data without postUrl.');
@@ -168,7 +196,7 @@ async function insertEngagement(pool, data) {
   }
 
   try {
-    console.log(`Inserting data to database for ${postUrl}: L:${likes}, C:${comments}, S:${shares}, V:${views}, Sa:${saves}`);
+    console.log(`Inserting data to database for ${postUrl}: L:${likes}, C:${comments}, S:${shares}, V:${views}, Sa:${saves}, TP:${totalPoints}`);
     const request = pool.request();
     request.input('Platform', sql.NVarChar, platform);
     request.input('PostUrl', sql.NVarChar, postUrl);
@@ -178,7 +206,8 @@ async function insertEngagement(pool, data) {
     request.input('Views', sql.Int, views);
     request.input('Saves', sql.Int, saves);
     request.input('ScrapedAt', sql.DateTime, scrapedAt);
-    
+    request.input('TotalPoints', sql.Int, totalPoints);
+  
     // Only add campaign and account parameters if they exist
     if (campaignId !== null) {
       request.input('CampaignId', sql.Int, campaignId);
@@ -188,8 +217,8 @@ async function insertEngagement(pool, data) {
     }
 
     // Build the SQL query dynamically based on which fields are present
-    const columns = ['Platform', 'PostUrl', 'Likes', 'Comments', 'Shares', 'Views', 'Saves', 'ScrapedAt'];
-    const parameters = ['@Platform', '@PostUrl', '@Likes', '@Comments', '@Shares', '@Views', '@Saves', '@ScrapedAt'];
+    const columns = ['Platform', 'PostUrl', 'Likes', 'Comments', 'Shares', 'Views', 'Saves','TotalPoints', 'ScrapedAt'];
+    const parameters = ['@Platform', '@PostUrl', '@Likes', '@Comments', '@Shares', '@Views', '@Saves','@TotalPoints', '@ScrapedAt'];
     
     if (campaignId !== null) {
       columns.push('CampaignId');
@@ -210,7 +239,7 @@ async function insertEngagement(pool, data) {
     console.log('Data inserted successfully');
   } catch (err) {
     console.error(`[SQL ERROR] Failed to insert data for ${postUrl}: ${err.message}`);
-    console.error('Failed data:', JSON.stringify({ platform, postUrl, likes, comments, shares, views, saves, scrapedAt }));
+    console.error('Failed data:', JSON.stringify({ platform, postUrl, likes, comments, shares, views, saves,totalPoints, scrapedAt }));
     throw err;
   }
 }

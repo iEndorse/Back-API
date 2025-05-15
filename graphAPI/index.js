@@ -110,12 +110,12 @@ setInterval(async () => {
         accessToken = credentials.accessToken;
         secretAccessKey = credentials.secretAccessKey;
         sqlpassword = credentials.sqlpassword;
-        openai_api_key = credentials.OPENAI_API_KEY;
+        openai_api_key = credentials.openai_api_key;
         console.log('Credentials Refreshed');
     } catch (error) {
         console.error('Failed to refresh credentials:', error);
     }
-}, 60000000);
+}, 3600000);
 
 app.get('/', (req, res) => {
   if (!accessToken) {

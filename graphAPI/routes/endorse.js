@@ -272,6 +272,7 @@ router.post('/endorse-campaign', upload.none(), async (req, res) => {
             const message = `
 ${endorsementText}
 ${campaignTitle}
+
 ${photoDescription}   
 ${campaignLink}
 ${campaignTargetAudienceAnswer}

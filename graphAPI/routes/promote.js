@@ -473,12 +473,29 @@ async function convertImageToPng(inputPath, outputPngPath) {
 
         // --- Step 4: Post to Facebook ---
         const endorsementText = endorsementNote ? `Endorsement: ${endorsementNote}\n\n` : '';
-        const message = `${campaign.CampaignTitle || 'Campaign'}\n${campaign.CampaignDescription || ''}\n\n${endorsementText}Link: ${campaign.CampaignLink || 'https://www.iendorse.ng/'}\nCategory: ${campaign.CampaignCategory || 'General'}`;
+        const message = `${campaign.CampaignTitle || 'Campaign'}\n\n${campaign.CampaignDescription || ''}\n\n${endorsementText}Link: ${campaign.CampaignLink || 'https://www.iendorse.ng/'}\nCategory: ${campaign.CampaignCategory || 'General'}`;
 
 
         const formData = new FormData();
         formData.append('access_token', accessToken);
-        formData.append('description', message);
+      //  formData.append('description', message);
+
+
+// Handle different parameters for video uploads
+//if (isVideoPost) {
+    // For videos via /videos endpoint
+    formData.append('description', message);
+    formData.append('title', campaign.CampaignTitle || 'Campaign');
+    // Add caption as well - some FB API versions prefer this
+  //  formData.append('message', message);
+//} else {
+    // For photos via /photos endpoint - this branch only runs for single images
+    // that aren't converted to video
+//    formData.append('message', message);
+//}
+
+
+
         // Use 'source' for videos, 'source' or 'file' for photos (let's use 'source' for consistency)
         formData.append('source', fs.createReadStream(finalMediaToUploadPath));
 
@@ -540,8 +557,9 @@ async function convertImageToPng(inputPath, outputPngPath) {
         return res.status(200).json({
             success: true,
             id: mediaId,
-            message: `Campaign ${isVideoPost ? 'video' : 'photo'} posted successfully to Facebook.`,
+            response: `Campaign ${isVideoPost ? 'video' : 'photo'} posted successfully to Facebook.`,
             campaignId: campaign.CampaignId,
+            message:message,
             postType: isVideoPost ? 'video' : 'image'
         });
 
