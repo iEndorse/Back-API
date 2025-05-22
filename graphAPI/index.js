@@ -21,11 +21,27 @@ const ocrRoutes = require('./routes/ocrRoutes');
 const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js'); // Import the route
 //const openaiRoutes = require('./routes/ocr-ai'); // Import the route
 // Enable CORS
-app.use(function (req, res, next) {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-    next();
-});
+//app.use(function (req, res, next) {
+  //  res.header("Access-Control-Allow-Origin", "*");
+   // res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+   // next();
+//});
+
+
+const allowedOrigins = ['https://www.iendorse.ng'];
+
+app.use(cors({
+  origin: function(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
+}));
+
 
 // Middleware (Important: Body parsing BEFORE routes)
 app.use(express.urlencoded({ extended: true })); // For form data
