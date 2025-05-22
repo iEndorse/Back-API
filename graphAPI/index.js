@@ -28,7 +28,10 @@ const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js'); // Import the ro
 //});
 
 
-const allowedOrigins = ['https://www.iendorse.ng'];
+const allowedOrigins = [
+  'https://www.iendorse.ng',
+  'https://www.iendorsenow.com'
+];
 
 app.use(cors({
   origin: function(origin, callback) {
