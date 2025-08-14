@@ -1,78 +1,97 @@
-
-
 name: Deploy to EC2 (Zero Downtime + Rollback + Health Check)
 
 on:
   push:
     branches:
-      - main  # Change branch if needed
+      - main  # Change if you deploy from another branch
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout the repo
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # 2️⃣ Set up Node.js
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 18  # Change if needed
+          node-version: 18
 
+      # 3️⃣ Install dependencies locally
       - name: Install dependencies
         run: npm ci --omit=dev
 
+      # 4️⃣ Build application (if you have a build script)
       - name: Build application
         run: |
           if [ -f package.json ] && grep -q "\"build\"" package.json; then
             npm run build
           fi
 
+      # 5️⃣ Set up SSH
       - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.5.4
+        uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-      - name: Backup current version on EC2
+      # 6️⃣ Backup current version on EC2
+      - name: Backup current version
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
             if [ -d '${{ secrets.EC2_PATH }}' ]; then
-              rm -rf ${EC2_PATH}_backup
-              cp -r ${{ secrets.EC2_PATH }} ${EC2_PATH}_backup
+              rm -rf ${{ secrets.EC2_PATH }}_backup
+              cp -r ${{ secrets.EC2_PATH }} ${{ secrets.EC2_PATH }}_backup
             fi
           "
 
-      - name: Upload build to EC2
+      # 7️⃣ Upload new build to EC2
+      - name: Upload code to EC2
         run: |
           rsync -avz --delete \
-            ./ \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}
+            --exclude=".git" \
+            --exclude=".github" \
+            --exclude="node_modules" \
+            $GITHUB_WORKSPACE/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}/
 
-      - name: Reload PM2 without downtime
+      # 8️⃣ Install prod dependencies & reload PM2
+      - name: Reload PM2 (Zero Downtime)
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
             set -e
-            cd ${{ secrets.EC2_PATH }} &&
-            npm ci --omit=dev &&
-            pm2 reload myapp
+            cd ${{ secrets.EC2_PATH }}
+            npm ci --omit=dev
+            pm2 reload iendorse-api || pm2 start server.js --name iendorse-api
+            pm2 save
           "
 
-      - name: Post-deployment health check
+      # 9️⃣ Post-deployment health check & automatic rollback
+      - name: Health check with rollback
         run: |
           echo "Waiting for app to start..."
           sleep 5
-          STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}" https://${{ secrets.EC2_HOST }}/health)
+          STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}" http://${{ secrets.EC2_HOST }}/health || echo 000)
           if [ "$STATUS_CODE" -ne 200 ]; then
-            echo "Health check failed with status $STATUS_CODE. Rolling back..."
+            echo "Health check failed ($STATUS_CODE). Rolling back..."
             ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
-              rm -rf ${{ secrets.EC2_PATH }}
-              mv ${EC2_PATH}_backup ${{ secrets.EC2_PATH }}
-              cd ${{ secrets.EC2_PATH }} &&
-              npm ci --omit=dev &&
-              pm2 reload myapp
+              set -e
+              if [ -d '${{ secrets.EC2_PATH }}_backup' ]; then
+                rm -rf ${{ secrets.EC2_PATH }}
+                mv ${{ secrets.EC2_PATH }}_backup ${{ secrets.EC2_PATH }}
+                cd ${{ secrets.EC2_PATH }}
+                npm ci --omit=dev || true
+                pm2 reload iendorse-api || pm2 start server.js --name iendorse-api
+                pm2 save
+              else
+                echo 'No backup found. Rollback not possible.'
+                exit 1
+              fi
             "
             exit 1
           else
             echo "Health check passed ✅"
+            ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "rm -rf ${{ secrets.EC2_PATH }}_backup || true"
           fi
