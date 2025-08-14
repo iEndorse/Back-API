@@ -1,0 +1,78 @@
+
+
+name: Deploy to EC2 (Zero Downtime + Rollback + Health Check)
+
+on:
+  push:
+    branches:
+      - main  # Change branch if needed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18  # Change if needed
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Build application
+        run: |
+          if [ -f package.json ] && grep -q "\"build\"" package.json; then
+            npm run build
+          fi
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Backup current version on EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            if [ -d '${{ secrets.EC2_PATH }}' ]; then
+              rm -rf ${EC2_PATH}_backup
+              cp -r ${{ secrets.EC2_PATH }} ${EC2_PATH}_backup
+            fi
+          "
+
+      - name: Upload build to EC2
+        run: |
+          rsync -avz --delete \
+            ./ \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}
+
+      - name: Reload PM2 without downtime
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+            set -e
+            cd ${{ secrets.EC2_PATH }} &&
+            npm ci --omit=dev &&
+            pm2 reload myapp
+          "
+
+      - name: Post-deployment health check
+        run: |
+          echo "Waiting for app to start..."
+          sleep 5
+          STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}" https://${{ secrets.EC2_HOST }}/health)
+          if [ "$STATUS_CODE" -ne 200 ]; then
+            echo "Health check failed with status $STATUS_CODE. Rolling back..."
+            ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
+              rm -rf ${{ secrets.EC2_PATH }}
+              mv ${EC2_PATH}_backup ${{ secrets.EC2_PATH }}
+              cd ${{ secrets.EC2_PATH }} &&
+              npm ci --omit=dev &&
+              pm2 reload myapp
+            "
+            exit 1
+          else
+            echo "Health check passed ✅"
+          fi
