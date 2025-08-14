@@ -3,7 +3,7 @@ name: Deploy to EC2 (Zero Downtime + Rollback + Health Check)
 on:
   push:
     branches:
-      - main  # Change if you deploy from another branch
+      - main
 
 jobs:
   deploy:
@@ -20,11 +20,18 @@ jobs:
         with:
           node-version: 18
 
-      # 3️⃣ Install dependencies locally
+      # 3️⃣ Install dependencies locally (fallback if no lock file)
       - name: Install dependencies
-        run: npm ci --omit=dev
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "Using npm ci"
+            npm ci --omit=dev
+          else
+            echo "No lock file found, using npm install"
+            npm install --omit=dev
+          fi
 
-      # 4️⃣ Build application (if you have a build script)
+      # 4️⃣ Build application if build script exists
       - name: Build application
         run: |
           if [ -f package.json ] && grep -q "\"build\"" package.json; then
@@ -47,7 +54,7 @@ jobs:
             fi
           "
 
-      # 7️⃣ Upload new build to EC2
+      # 7️⃣ Upload code to EC2
       - name: Upload code to EC2
         run: |
           rsync -avz --delete \
@@ -57,18 +64,22 @@ jobs:
             $GITHUB_WORKSPACE/ \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}/
 
-      # 8️⃣ Install prod dependencies & reload PM2
+      # 8️⃣ Install prod dependencies on EC2 & reload PM2
       - name: Reload PM2 (Zero Downtime)
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
             set -e
             cd ${{ secrets.EC2_PATH }}
-            npm ci --omit=dev
+            if [ -f package-lock.json ]; then
+              npm ci --omit=dev
+            else
+              npm install --omit=dev
+            fi
             pm2 reload iendorse-api || pm2 start server.js --name iendorse-api
             pm2 save
           "
 
-      # 9️⃣ Post-deployment health check & automatic rollback
+      # 9️⃣ Health check & automatic rollback
       - name: Health check with rollback
         run: |
           echo "Waiting for app to start..."
@@ -82,7 +93,11 @@ jobs:
                 rm -rf ${{ secrets.EC2_PATH }}
                 mv ${{ secrets.EC2_PATH }}_backup ${{ secrets.EC2_PATH }}
                 cd ${{ secrets.EC2_PATH }}
-                npm ci --omit=dev || true
+                if [ -f package-lock.json ]; then
+                  npm ci --omit=dev || true
+                else
+                  npm install --omit=dev || true
+                fi
                 pm2 reload iendorse-api || pm2 start server.js --name iendorse-api
                 pm2 save
               else
