@@ -1,21 +1,15 @@
-
-
-
 #!/bin/bash
+set -e
 
-echo "Starting application..."
-# Navigate to app directory
-cd /home/ubuntu/iendorse/Back-API/graphAPI || exit 1
+NEW_RELEASE=$(cat /tmp/deploy_path.txt)
+CURRENT_LINK="/home/ubuntu/iendorse/Back-API/current"
 
-# Install dependencies just in case
-npm ci --omit=dev
+# Point symlink to new release
+ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
 
-# Reload PM2 process if it exists, else start it
-if pm2 list | grep -q iendorse; then
-  pm2 reload iendorse
-else
-  pm2 start server.js --name iendorse
-fi
+cd "$CURRENT_LINK"
 
-# Save PM2 process list
-pm2 save
+# Zero-downtime reload
+pm2 describe iendorse > /dev/null 2>&1 && pm2 reload iendorse || pm2 start server.js --name iendorse
+
+echo "ApplicationStart completed."
