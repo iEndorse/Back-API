@@ -1,4 +1,4 @@
-name: Deploy to EC2 (Zero Downtime + Rollback + Health Check)
+name: Deploy via CodeDeploy
 
 on:
   push:
@@ -10,109 +10,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Set up Node.js
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
         with:
-          node-version: 18
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Install dependencies in graphAPI directory
-      - name: Install dependencies
+      - name: Create Blue/Green Deployment
         run: |
-          cd graphAPI
-          if [ -f package-lock.json ]; then
-            echo "Using npm ci"
-            npm ci --omit=dev
-          else
-            echo "No lock file found, using npm install"
-            npm install --omit=dev
-          fi
-
-      # 4️⃣ Build application if a build script exists
-      - name: Build application
-        run: |
-          cd graphAPI
-          if [ -f package.json ] && grep -q "\"build\"" package.json; then
-            npm run build
-          fi
-
-      # 5️⃣ Set up SSH to EC2
-      - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
-
-      # 6️⃣ Backup current version on EC2
-      - name: Backup current version on EC2
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
-            if [ -d '${{ secrets.EC2_PATH }}' ]; then
-              echo 'Creating backup...'
-              rm -rf ${{ secrets.EC2_PATH }}_backup || true
-              cp -r ${{ secrets.EC2_PATH }} ${{ secrets.EC2_PATH }}_backup
-            fi
-          "
-
-      # 7️⃣ Upload new code to EC2
-      - name: Upload code to EC2
-        run: |
-          rsync -avz --delete \
-            --exclude=".git" \
-            --exclude=".github" \
-            --exclude="node_modules" \
-            graphAPI/ \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}/
-
-      # 8️⃣ Install prod dependencies on EC2 & reload PM2
-      - name: Reload PM2 (Zero Downtime)
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
-            set -e
-            cd ${{ secrets.EC2_PATH }}
-            if [ -f package-lock.json ]; then
-              npm ci --omit=dev
-            else
-              npm install --omit=dev
-            fi
-            # Reload PM2 or start if not running
-            pm2 reload iendorse-api || pm2 start server.js --name iendorse-api
-            pm2 save
-          "
-
-      # 9️⃣ Post-deployment health check & rollback if failed
-      - name: Health check with automatic rollback
-        run: |
-          echo "Waiting for app to start..."
-          sleep 5
-          STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}" http://${{ secrets.EC2_HOST }}/health || echo 000)
-          if [ "$STATUS_CODE" -ne 200 ]; then
-            echo "Health check failed ($STATUS_CODE). Rolling back..."
-            ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
-              set -e
-              if [ -d '${{ secrets.EC2_PATH }}_backup' ]; then
-                echo 'Restoring backup...'
-                rm -rf ${{ secrets.EC2_PATH }}
-                mv ${{ secrets.EC2_PATH }}_backup ${{ secrets.EC2_PATH }}
-                cd ${{ secrets.EC2_PATH }}
-                if [ -f package-lock.json ]; then
-                  npm ci --omit=dev || true
-                else
-                  npm install --omit=dev || true
-                fi
-                pm2 reload iendorse-api || pm2 start server.js --name iendorse-api
-                pm2 save
-              else
-                echo 'No backup found. Rollback not possible.'
-                exit 1
-              fi
-            "
-            exit 1
-          else
-            echo "Health check passed ✅"
-            # Clean up backup if deploy successful
-            ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "rm -rf ${{ secrets.EC2_PATH }}_backup || true"
-          fi
+          aws deploy create-deployment \
+            --application-name iEndorseApp \
+            --deployment-group-name iEndorseGroup \
+            --github-location repository=${{ github.repository }},commitId=${{ github.sha }} \
+            --deployment-config-name CodeDeployDefault.AllAtOnce \
+            --deployment-style deploymentType=BLUE_GREEN,deploymentOption=WITH_TRAFFIC_CONTROL
