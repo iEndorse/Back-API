@@ -3,7 +3,7 @@ os: linux
 
 files:
   - source: graphAPI/
-    destination: /home/ubuntu/iendorse/Back-API/graphAPI
+    destination: /home/ubuntu/iendorse/Back-API/releases/ # Each deploy gets a timestamped folder
     overwrite: true
 
 hooks:
