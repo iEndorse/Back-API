@@ -27,4 +27,9 @@ jobs:
             --deployment-group-name iEndorseGroup \
             --github-location repository=${{ github.repository }},commitId=${{ github.sha }} \
             --deployment-config-name CodeDeployDefault.AllAtOnce \
-            --deployment-style deploymentType=BLUE_GREEN,deploymentOption=WITH_TRAFFIC_CONTROL
+            --deployment-style '{"deploymentType":"BLUE_GREEN","deploymentOption":"WITH_TRAFFIC_CONTROL"}'
+
+
+
+
+
