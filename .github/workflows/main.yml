@@ -30,10 +30,14 @@ jobs:
             npm run build
           fi
 
-      - name: Zip application
+      - name: Zip application for CodeDeploy
         run: |
-          cd graphAPI
-          zip -r ../deployment.zip .
+          # Go to repo root (where appspec.yml and scripts/ are)
+          cd $GITHUB_WORKSPACE
+          # Remove old zip if it exists
+          rm -f deployment.zip
+          # Include appspec.yml, scripts/, and graphAPI/ in the zip
+          zip -r deployment.zip appspec.yml scripts graphAPI
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
