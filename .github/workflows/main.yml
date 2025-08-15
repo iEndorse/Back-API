@@ -20,10 +20,10 @@ jobs:
         with:
           node-version: 18
 
-      # 3️⃣ Install dependencies locally (in graphAPI folder)
+      # 3️⃣ Install dependencies in graphAPI directory
       - name: Install dependencies
         run: |
-          cd Back-API/graphAPI
+          cd graphAPI
           if [ -f package-lock.json ]; then
             echo "Using npm ci"
             npm ci --omit=dev
@@ -32,10 +32,10 @@ jobs:
             npm install --omit=dev
           fi
 
-      # 4️⃣ Build the application if a build script exists
+      # 4️⃣ Build application if a build script exists
       - name: Build application
         run: |
-          cd Back-API/graphAPI
+          cd graphAPI
           if [ -f package.json ] && grep -q "\"build\"" package.json; then
             npm run build
           fi
@@ -64,7 +64,7 @@ jobs:
             --exclude=".git" \
             --exclude=".github" \
             --exclude="node_modules" \
-            $GITHUB_WORKSPACE/Back-API/graphAPI/ \
+            graphAPI/ \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}/
 
       # 8️⃣ Install prod dependencies on EC2 & reload PM2
