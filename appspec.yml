@@ -1,10 +1,9 @@
 version: 0.0
 os: linux
-
 files:
-  - source: graphAPI/
-    destination: /home/ubuntu/iendorse/Back-API/releases/ # Each deploy gets a timestamped folder
-    overwrite: true
+  - source: /
+    destination: /home/ubuntu/iendorse/Back-API/graphAPI
+    overwrite: true  # Ensure new files overwrite existing ones
 
 hooks:
   BeforeInstall:
@@ -25,4 +24,10 @@ hooks:
   ApplicationStart:
     - location: scripts/start_server.sh
       timeout: 300
+      runas: ubuntu
+
+  # Optional: validate deployment
+  ValidateService:
+    - location: scripts/health_check.sh
+      timeout: 120
       runas: ubuntu
