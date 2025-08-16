@@ -13,8 +13,7 @@ if [ -d "$APP_DIR" ]; then
     cp -r "$APP_DIR" "$BACKUP_DIR"
 fi
 
-# Ensure directory structure exists with correct permissions
+# Ensure directory structure exists
 mkdir -p /home/ubuntu/iendorse/Back-API/graphAPI
-chown -R ubuntu:ubuntu /home/ubuntu/iendorse
 
 echo "Before Install completed successfully"
