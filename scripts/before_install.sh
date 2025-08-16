@@ -1,16 +1,17 @@
 #!/bin/bash
 set -e
 
-RELEASES_DIR="/home/ubuntu/iendorse/Back-API/releases"
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
-NEW_RELEASE="$RELEASES_DIR/$TIMESTAMP"
+echo "Running BeforeInstall steps..."
 
-# Ensure parent folder exists and is writable
-mkdir -p "$RELEASES_DIR"
-chmod u+rwx "$RELEASES_DIR"
+# Navigate to project root
+cd /home/ubuntu/iendorse/Back-API/graphAPI
 
-echo "Creating new release folder: $NEW_RELEASE"
-mkdir -p "$NEW_RELEASE"
+# Fix permissions
+sudo chown -R ubuntu:ubuntu /home/ubuntu/iendorse
 
-# Store path for after_install and start_server scripts
-echo "$NEW_RELEASE" > /tmp/deploy_path.txt
+# Create a release folder (with timestamp)
+RELEASE_DIR="/home/ubuntu/iendorse/Back-API/releases/$(date +%Y%m%d%H%M%S)"
+mkdir -p "$RELEASE_DIR"
+echo "Created release folder: $RELEASE_DIR"
+
+echo "BeforeInstall completed."
