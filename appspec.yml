@@ -2,32 +2,36 @@ version: 0.0
 os: linux
 files:
   - source: /
-    destination: /home/ubuntu/iendorse/Back-API/graphAPI
-    overwrite: true  # Ensure new files overwrite existing ones
-
+    destination: /opt/iendorse
+    overwrite: yes
+    file_exists_behavior: OVERWRITE
+permissions:
+  - object: /opt/iendorse
+    owner: ubuntu
+    group: ubuntu
+    mode: 755
+    type:
+      - directory
+  - object: /opt/iendorse
+    owner: ubuntu
+    group: ubuntu
+    mode: 644
+    type:
+      - file
 hooks:
   BeforeInstall:
     - location: scripts/before_install.sh
       timeout: 300
-      runas: ubuntu
-
-  AfterInstall:
-    - location: scripts/after_install.sh
-      timeout: 300
-      runas: ubuntu
-
+      runas: root
   ApplicationStop:
-    - location: scripts/stop_server.sh
+    - location: scripts/stop_application.sh
       timeout: 300
       runas: ubuntu
-
   ApplicationStart:
-    - location: scripts/start_server.sh
+    - location: scripts/start_application.sh
       timeout: 300
       runas: ubuntu
-
-  # Optional: validate deployment
-  ValidateService:
-    - location: scripts/health_check.sh
-      timeout: 120
+  ApplicationReady:
+    - location: scripts/validate_service.sh
+      timeout: 300
       runas: ubuntu
