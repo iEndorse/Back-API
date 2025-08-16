@@ -151,7 +151,7 @@ jobs:
             echo "Health check attempt $ATTEMPT/$MAX_ATTEMPTS"
             
             STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}" \
-              http://${{ secrets.HEALTH_CHECK_URL }}/health || echo 000)
+              https://${{ secrets.HEALTH_CHECK_URL }}/health || echo 000)
             
             if [ "$STATUS_CODE" -eq 200 ]; then
               echo "✅ Health check passed!"
