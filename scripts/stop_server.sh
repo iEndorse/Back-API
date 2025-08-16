@@ -1,16 +1,15 @@
 #!/bin/bash
 set -e
 
-APP_NAME="iendorse"
+echo "Stopping Node app with PM2..."
 
-echo "Stopping PM2 process $APP_NAME if it exists..."
+# Navigate to project folder
+cd /home/ubuntu/iendorse/Back-API/graphAPI
 
-# Graceful stop; delete if it hangs
-pm2 describe $APP_NAME > /dev/null 2>&1
-if [ $? -eq 0 ]; then
-    pm2 stop $APP_NAME || pm2 delete $APP_NAME || true
+# Stop the app safely if it exists
+if pm2 list | grep -q iendorse; then
+  pm2 stop iendorse
+  echo "App stopped."
 else
-    echo "PM2 process $APP_NAME not running. Skipping stop."
+  echo "PM2 process not found, skipping stop."
 fi
-
-echo "Stop server completed."
