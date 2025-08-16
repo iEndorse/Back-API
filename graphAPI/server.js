@@ -72,6 +72,17 @@ setInterval(async () => {
     }
 }, 600000);
 
+// HEALTH CHECK ROUTE - Define this BEFORE other middleware that might block it
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'healthy', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        port: port, // Fixed: use the port variable, not process.env.port
+        accessTokenLoaded: !!accessToken // Shows if token is loaded without exposing it
+    });
+});
+
 app.get('/', (req, res) => {
   if (!accessToken) {
     return res.status(500).send('Application failed to initialize: Access Token missing.');
@@ -98,3 +109,5 @@ app.use('/', facebookRoutesvideoV1); // Mount the routes at the root path
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
+
+
