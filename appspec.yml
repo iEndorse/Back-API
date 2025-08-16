@@ -32,18 +32,18 @@ permissions:
       - file
 hooks:
   BeforeInstall:
-    - location: scripts/before_install.sh
+    - location: scripts/deploy.sh
       timeout: 300
       runas: root
   ApplicationStop:
-    - location: scripts/stop_application.sh
+    - location: scripts/deploy.sh
       timeout: 300
       runas: ubuntu
   ApplicationStart:
-    - location: scripts/start_application.sh
+    - location: scripts/deploy.sh
       timeout: 300
       runas: ubuntu
   ApplicationReady:
-    - location: scripts/validate_service.sh
+    - location: scripts/deploy.sh
       timeout: 300
       runas: ubuntu
