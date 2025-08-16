@@ -1,1 +1,182 @@
 
+name: Deploy to EC2 via CodeDeploy (Zero Downtime + Rollback + Health Check)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3️⃣ Install dependencies in graphAPI directory
+      - name: Install dependencies
+        run: |
+          cd graphAPI
+          if [ -f package-lock.json ]; then
+            echo "Using npm ci"
+            npm ci --omit=dev
+          else
+            echo "No lock file found, using npm install"
+            npm install --omit=dev
+          fi
+
+      # 4️⃣ Build application if a build script exists
+      - name: Build application
+        run: |
+          cd graphAPI
+          if [ -f package.json ] && grep -q "\"build\"" package.json; then
+            npm run build
+          fi
+
+      # 5️⃣ Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # 6️⃣ Create deployment package
+      - name: Create deployment package
+        run: |
+          # Copy appspec.yml to root if it doesn't exist
+          if [ ! -f appspec.yml ]; then
+            cp .github/appspec.yml . || echo "appspec.yml not found in .github/"
+          fi
+          
+          # Create deployment package with graphAPI contents and scripts
+          mkdir -p deployment_package
+          cp -r graphAPI/* deployment_package/
+          cp appspec.yml deployment_package/
+          cp -r .github/codedeploy_scripts deployment_package/scripts/ || mkdir -p deployment_package/scripts
+          
+          # Create zip file with timestamp
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          cd deployment_package
+          zip -r ../deploy-${TIMESTAMP}.zip .
+          cd ..
+          echo "DEPLOY_ZIP=deploy-${TIMESTAMP}.zip" >> $GITHUB_ENV
+          echo "TIMESTAMP=${TIMESTAMP}" >> $GITHUB_ENV
+
+      # 7️⃣ Upload deployment package to S3
+      - name: Upload to S3
+        run: |
+          aws s3 cp ${{ env.DEPLOY_ZIP }} s3://${{ secrets.S3_BUCKET_NAME }}/deployments/${{ env.DEPLOY_ZIP }}
+
+      # 8️⃣ Create CodeDeploy deployment
+      - name: Create CodeDeploy deployment
+        run: |
+          DEPLOYMENT_ID=$(aws deploy create-deployment \
+            --application-name ${{ secrets.CODEDEPLOY_APPLICATION }} \
+            --deployment-group-name ${{ secrets.CODEDEPLOY_DEPLOYMENT_GROUP }} \
+            --s3-location bucket=${{ secrets.S3_BUCKET }},key=deployments/${{ env.DEPLOY_ZIP }},bundleType=zip \
+            --file-exists-behavior OVERWRITE \
+            --query 'deploymentId' \
+            --output text)
+          
+          echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> $GITHUB_ENV
+          echo "Created deployment: ${DEPLOYMENT_ID}"
+
+      # 9️⃣ Wait for deployment and monitor status
+      - name: Monitor deployment status
+        run: |
+          echo "Monitoring deployment: ${{ env.DEPLOYMENT_ID }}"
+          
+          # Wait for deployment to complete (max 10 minutes)
+          TIMEOUT=600
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(aws deploy get-deployment \
+              --deployment-id ${{ env.DEPLOYMENT_ID }} \
+              --query 'deploymentInfo.status' \
+              --output text)
+            
+            echo "Deployment status: $STATUS"
+            
+            case $STATUS in
+              "Succeeded")
+                echo "✅ Deployment successful!"
+                exit 0
+                ;;
+              "Failed"|"Stopped")
+                echo "❌ Deployment failed with status: $STATUS"
+                # Get failure details
+                aws deploy get-deployment \
+                  --deployment-id ${{ env.DEPLOYMENT_ID }} \
+                  --query 'deploymentInfo.errorInformation' \
+                  --output table
+                exit 1
+                ;;
+              "InProgress"|"Queued"|"Created")
+                echo "⏳ Deployment in progress..."
+                sleep 30
+                ELAPSED=$((ELAPSED + 30))
+                ;;
+              *)
+                echo "Unknown status: $STATUS"
+                sleep 30
+                ELAPSED=$((ELAPSED + 30))
+                ;;
+            esac
+          done
+          
+          echo "❌ Deployment timed out after 10 minutes"
+          exit 1
+
+      # 🔟 Post-deployment health check
+      - name: Post-deployment health check
+        run: |
+          echo "Waiting for application to start..."
+          sleep 10
+          
+          # Try health check multiple times
+          MAX_ATTEMPTS=5
+          ATTEMPT=1
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Health check attempt $ATTEMPT/$MAX_ATTEMPTS"
+            
+            STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}" \
+              http://${{ secrets.HEALTH_CHECK_URL }}/health || echo 000)
+            
+            if [ "$STATUS_CODE" -eq 200 ]; then
+              echo "✅ Health check passed!"
+              exit 0
+            else
+              echo "❌ Health check failed (HTTP $STATUS_CODE)"
+              if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+                echo "All health check attempts failed. Consider rolling back."
+                exit 1
+              fi
+              sleep 15
+              ATTEMPT=$((ATTEMPT + 1))
+            fi
+          done
+
+      # 1️⃣1️⃣ Cleanup old deployments from S3 (keep last 5)
+      - name: Cleanup old deployments
+        if: always()
+        run: |
+          aws s3api list-objects-v2 \
+            --bucket ${{ secrets.S3_BUCKET }} \
+            --prefix deployments/ \
+            --query 'Contents[?Size>`0`].[Key,LastModified]' \
+            --output text | \
+            sort -k2 -r | \
+            tail -n +6 | \
+            cut -f1 | \
+            xargs -I {} aws s3 rm s3://${{ secrets.S3_BUCKET }}/{} || true
