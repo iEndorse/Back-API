@@ -46,6 +46,17 @@ app.use(cors({
 }));
 
 
+// HEALTH CHECK ROUTE - Define this BEFORE other middleware that might block it
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'healthy', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        port: port, // Fixed: use the port variable, not process.env.port
+        accessTokenLoaded: !!accessToken // Shows if token is loaded without exposing it
+    });
+});
+
 // Middleware (Important: Body parsing BEFORE routes)
 app.use(express.urlencoded({ extended: true })); // For form data
 app.use(express.json()); // For JSON data
