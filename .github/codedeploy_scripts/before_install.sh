@@ -1,19 +1,22 @@
-# .github/codedeploy_scripts/before_install.sh
+# before_install.sh
 #!/bin/bash
 set -e
 
 echo "Before Install: Creating backup and preparing environment"
 
-# Create backup directory
-if [ -d "/opt/iendorse-api" ]; then
+APP_DIR="/home/ubuntu/iendorse/Back-API/graphAPI"
+BACKUP_DIR="/home/ubuntu/iendorse_backup"
+
+# Create backup directory with consistent naming
+if [ -d "$APP_DIR" ]; then
     echo "Creating backup of current version..."
-    rm -rf /opt/iendorse_backup || true
-    cp -r /opt/iendorse /opt/iendorse_backup
+    rm -rf "$BACKUP_DIR" || true
+    cp -r "$APP_DIR" "$BACKUP_DIR"
 fi
 
-# Ensure directory exists with correct permissions
-mkdir -p /opt/iendorse
-chown ubuntu:ubuntu /opt/iendorse
+# Ensure directory structure exists with correct permissions
+mkdir -p /home/ubuntu/iendorse/Back-API/graphAPI
+chown -R ubuntu:ubuntu /home/ubuntu/iendorse
 
 # Install Node.js if not present
 if ! command -v node &> /dev/null; then
@@ -30,29 +33,30 @@ fi
 
 ---
 
-# .github/codedeploy_scripts/stop_application.sh
+# stop_application.sh
 #!/bin/bash
 set -e
 
 echo "Stopping application..."
 
-# Stop PM2 process if running
+# Stop PM2 process if running (consistent naming)
 if pm2 list | grep -q "iendorse"; then
-    echo "Stopping iendorse-api process..."
+    echo "Stopping iendorse process..."
     pm2 stop iendorse || true
 else
-    echo "iendorse-api process not running"
+    echo "iendorse process not running"
 fi
 
 ---
 
-# .github/codedeploy_scripts/start_application.sh
+# start_application.sh
 #!/bin/bash
 set -e
 
 echo "Starting application..."
 
-cd /opt/iendorse
+APP_DIR="/home/ubuntu/iendorse/Back-API/graphAPI"
+cd "$APP_DIR"
 
 # Install production dependencies
 echo "Installing dependencies..."
@@ -65,10 +69,10 @@ fi
 # Start or reload the application with PM2
 echo "Starting/reloading application with PM2..."
 if pm2 list | grep -q "iendorse"; then
-    echo "Reloading existing iendorse-api process..."
+    echo "Reloading existing iendorse process..."
     pm2 reload iendorse
 else
-    echo "Starting new iendorse-api process..."
+    echo "Starting new iendorse process..."
     pm2 start server.js --name iendorse
 fi
 
@@ -79,17 +83,20 @@ echo "Application started successfully"
 
 ---
 
-# .github/codedeploy_scripts/validate_service.sh
+# validate_service.sh
 #!/bin/bash
 set -e
 
 echo "Validating service..."
 
+APP_DIR="/home/ubuntu/iendorse/Back-API/graphAPI"
+BACKUP_DIR="/home/ubuntu/iendorse_backup"
+
 # Wait for application to start
 sleep 10
 
 # Check if PM2 process is running
-if ! pm2 list | grep -q "iendorse-api.*online"; then
+if ! pm2 list | grep -q "iendorse.*online"; then
     echo "❌ PM2 process is not running!"
     
     # Check PM2 logs for errors
@@ -98,12 +105,12 @@ if ! pm2 list | grep -q "iendorse-api.*online"; then
     
     # Attempt rollback
     echo "Attempting rollback..."
-    if [ -d "/opt/iendorse-api_backup" ]; then
-        rm -rf /opt/iendorse
-        mv /opt/iendorse_backup /opt/iendorse
-        cd /opt/iendorse
+    if [ -d "$BACKUP_DIR" ]; then
+        rm -rf "$APP_DIR"
+        cp -r "$BACKUP_DIR" "$APP_DIR"
+        cd "$APP_DIR"
         npm ci --omit=dev || true
-        pm2 start server.js --name iendorse|| pm2 reload iendorse
+        pm2 start server.js --name iendorse || pm2 reload iendorse
         pm2 save
         echo "Rollback completed"
     fi
@@ -125,7 +132,7 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
     if [ "$STATUS_CODE" -eq 200 ]; then
         echo "✅ Health check passed!"
         # Clean up backup on successful deployment
-        rm -rf /opt/iendorse_backup || true
+        rm -rf "$BACKUP_DIR" || true
         exit 0
     else
         echo "❌ Health check failed (HTTP $STATUS_CODE)"
@@ -134,11 +141,11 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             
             # Attempt rollback
             echo "Attempting rollback..."
-            if [ -d "/opt/iendorse-api_backup" ]; then
+            if [ -d "$BACKUP_DIR" ]; then
                 pm2 stop iendorse || true
-                rm -rf /opt/iendorse
-                mv /opt/iendorse_backup /opt/iendorse-api
-                cd /opt/iendorse
+                rm -rf "$APP_DIR"
+                cp -r "$BACKUP_DIR" "$APP_DIR"
+                cd "$APP_DIR"
                 npm ci --omit=dev || true
                 pm2 start server.js --name iendorse || pm2 reload iendorse
                 pm2 save
