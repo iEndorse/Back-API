@@ -82,7 +82,7 @@ jobs:
           DEPLOYMENT_ID=$(aws deploy create-deployment \
             --application-name ${{ secrets.CODEDEPLOY_APPLICATION }} \
             --deployment-group-name ${{ secrets.CODEDEPLOY_DEPLOYMENT_GROUP }} \
-            --s3-location bucket=${{ secrets.S3_BUCKET }},key=deployments/${{ env.DEPLOY_ZIP }},bundleType=zip \
+            --s3-location bucket=${{ secrets.S3_BUCKET_NAME }},key=deployments/${{ env.DEPLOY_ZIP }},bundleType=zip \
             --file-exists-behavior OVERWRITE \
             --query 'deploymentId' \
             --output text)
