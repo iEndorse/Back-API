@@ -108,6 +108,21 @@ async function createVideoFromImages(imagePaths, outputVideoPath, duration=40, a
     });
 }
 
+// Helper: pick random audio file
+function getRandomAudio() {
+    const audioDir = path.join(__dirname, '../uploads/audio');
+    if (!fs.existsSync(audioDir)) return null;
+
+    const files = fs.readdirSync(audioDir).filter(file =>
+        [".mp3", ".wav", ".m4a"].includes(path.extname(file).toLowerCase())
+    );
+
+    if (!files.length) return null;
+
+    const randomFile = files[Math.floor(Math.random() * files.length)];
+    return path.join(audioDir, randomFile);
+}
+
 // Safe unlink
 function safeUnlink(file) { if(file && fs.existsSync(file)) fs.unlinkSync(file); }
 
@@ -172,12 +187,12 @@ router.post('/promote-campaign', upload.none(), async (req,res) => {
                 convertedPaths.push(pngPath);
             }
 
-            // Optional audio path
-            const audioPath = path.join(__dirname,'../uploads/audio.mp3'); // adjust if your file exists
+            // Select random audio
+            const audioPath = getRandomAudio();
             finalMediaPath = path.join(TEMP_DIR, `campaign_${campaignId}_${uuidv4()}.mp4`);
             tempFiles.push(finalMediaPath);
-            const duration = 50; // default duration for video creation
-            await createVideoFromImages(convertedPaths, finalMediaPath, duration, fs.existsSync(audioPath)?audioPath:null);
+            const duration = 50; // total duration
+            await createVideoFromImages(convertedPaths, finalMediaPath, duration, audioPath);
             isVideo = true;
         } else if (downloadedPaths.length===1 && types[0].includes('video')){
             finalMediaPath = downloadedPaths[0];
