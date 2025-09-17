@@ -15,6 +15,7 @@ const iendorseRoutes = require('./routes/endorse');
 const iendorseV1 = require('./routes/endorseV1');
 const boost = require('./routes/boost');
 const promoteRoutes = require('./routes/promote');
+const promoteRoutesai = require('./routes/promoteai');
 const engagementRoutes = require('./routes/engagement');
 const imageTextRoutes = require('./routes/imagetext'); // Import the route
 const ocrRoutes = require('./routes/ocrRoutes');
@@ -208,6 +209,7 @@ app.use('/', engagementRoutes);
 app.use('/', imageTextRoutes); // Use the image text route
 app.use('/', ocrRoutes);
 app.use('/', ocropenaiRoutes); // Use the OCR Azure route
+app.use('/', promoteRoutesai);
 //app.use('/', openaiRoutes); // Use the OpenAI route
 
 // Basic route (Note: this is defined twice in your original code)
