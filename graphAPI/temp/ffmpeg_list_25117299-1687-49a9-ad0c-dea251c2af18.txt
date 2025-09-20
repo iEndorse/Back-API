@@ -1,0 +1,17 @@
+file '/workspaces/Back-API/graphAPI/temp/conv_0_21677d55-d70f-4081-832e-edae83668118.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_1_f160bb87-aaed-418e-9348-ee66504bc92d.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_2_f6a630c3-2619-488a-be5b-0df779048f5c.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_3_e977c4b4-560c-4ceb-a919-698062209a08.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_4_75951ce1-a7d9-46bc-b011-a54c900a9c7c.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_5_b05d0d2d-2aa0-40fc-8589-b2bb6fa9c052.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_6_54828948-3880-4759-b5be-e62b796f0e10.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_7_a74b2a37-9024-4b2d-9385-d3e9de6abebc.png'
+duration 5.555555555555555
+file '/workspaces/Back-API/graphAPI/temp/conv_8_7db9a5b1-7e63-4a2c-b4b8-898abeb2ca1e.png'
