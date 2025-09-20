@@ -128,7 +128,7 @@ function safeUnlink(file) { if(file && fs.existsSync(file)) fs.unlinkSync(file);
 
 const upload = multer();
 
-router.post('/promote-campaign', upload.none(), async (req,res) => {
+router.post('/promote-campaign2', upload.none(), async (req,res) => {
     const campaignId = Number(req.body.campaignId || req.query.campaignId);
     const accessToken = req.accessToken || req.body.accessToken || req.query.accessToken;
     const numberOfUnits = req.body.numberOfUnits || req.query.numberOfUnits;
