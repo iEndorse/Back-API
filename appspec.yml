@@ -7,7 +7,10 @@ files:
     file_exists_behavior: OVERWRITE
 hooks:
   BeforeInstall:
-    - location: scripts/before_install.sh
+      - location: scripts/pre-deployment-cleanup.sh
+      timeout: 300
+      runas: root
+    - location: scripts/stop_server.sh
       timeout: 300
       runas: root
   AfterInstall:
