@@ -150,36 +150,113 @@ function parseAIResponse(content) {
     }
 }
 
-// AI comments
-async function generateAIComments(campaign, message) {
+/**
+ * Generates AI-powered social media comments for IEndorse campaigns
+ * @param {Object} campaign - Campaign object containing title and description
+ * @param {string} campaign.CampaignTitle - Title of the campaign
+ * @param {string} campaign.CampaignDescription - Description of the campaign
+ * @param {string} message - The post message to generate comments for
+ * @param {string} apiKey - OpenAI API key
+ * @returns {Promise<string[]>} Array of generated comments
+ * @throws {Error} When OpenAI API fails or returns invalid response
+ */
+async function generateAIComments(campaign, message, apiKey) {
+    // Validate input parameters
+    if (!campaign || !campaign.CampaignTitle || !campaign.CampaignDescription) {
+        throw new Error('Campaign object with CampaignTitle and CampaignDescription is required');
+    }
+    
+    if (!message || typeof message !== 'string') {
+        throw new Error('Post message is required and must be a string');
+    }
+
+    if (!apiKey || typeof apiKey !== 'string') {
+        throw new Error('OpenAI API key is required');
+    }
+
+    // Initialize OpenAI with the provided API key
+    const openai = new OpenAI({
+        apiKey: apiKey
+    });
+
     const prompt = `
 You are an AI social media engagement assistant for IEndorse.
-Generate 5 short positive comments under 30 words in JSON format:
+Generate 5 short positive comments under 30 words each in JSON format:
 {
   "comments": ["", "", "", "", ""]
 }
+
 Campaign Title: ${campaign.CampaignTitle}
 Campaign Description: ${campaign.CampaignDescription}
-Post Message: ${message}`;
+Post Message: ${message}
+
+Requirements:
+- Each comment should be unique and relevant
+- Use a professional, thought-leader tone
+- Keep comments under 30 words
+- Make comments engaging and authentic
+- Avoid repetitive phrases`;
     
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4",
+            model: 'gpt-4',
             messages: [
-                { role: "system", content: "Generate short marketing comments in a thought-leader tone." },
+                { 
+                    role: "system", 
+                    content: "You are a professional social media engagement specialist. Generate authentic, varied comments that sound natural and engaging. Always respond with valid JSON format." 
+                },
                 { role: "user", content: prompt }
             ],
-            max_tokens: 400
+            max_tokens: 500,
+            temperature: 0.8
         });
-        return JSON.parse(response.choices[0].message.content).comments || [];
-    } catch {
-        return [
-            "Amazing initiative! 🚀",
-            "This is exactly what we need 🙌",
-            "Great work by the team!",
-            "Proud to endorse this campaign 💙",
-            "Looking forward to seeing the impact!"
-        ];
+
+        // Validate response structure
+        if (!response.choices || !response.choices[0] || !response.choices[0].message) {
+            throw new Error('Invalid response structure from OpenAI API');
+        }
+
+        const content = response.choices[0].message.content;
+        
+        // Parse JSON response with error handling
+        let parsedResponse;
+        try {
+            parsedResponse = JSON.parse(content);
+        } catch (parseError) {
+            console.error('Failed to parse OpenAI response as JSON:', content);
+            throw new Error('OpenAI returned invalid JSON format');
+        }
+
+        // Validate parsed response structure
+        if (!parsedResponse.comments || !Array.isArray(parsedResponse.comments)) {
+            throw new Error('Response missing comments array');
+        }
+
+        // Filter out empty comments and ensure we have valid strings
+        const validComments = parsedResponse.comments
+            .filter(comment => comment && typeof comment === 'string' && comment.trim().length > 0)
+            .map(comment => comment.trim());
+
+        if (validComments.length === 0) {
+            throw new Error('No valid comments generated');
+        }
+
+        return validComments;
+
+    } catch (error) {
+        // Enhanced error reporting
+        if (error.response) {
+            // OpenAI API error
+            console.error('OpenAI API Error:', error.response.status, error.response.data);
+            throw new Error(`OpenAI API error: ${error.response.status} - ${error.response.data?.error?.message || 'Unknown error'}`);
+        } else if (error.message.includes('JSON')) {
+            // JSON parsing error - already handled above
+            throw error;
+        } else {
+            // Network or other errors
+            console.error('Error generating AI comments:', error);
+            throw new Error(`Failed to generate comments: ${error.message}`);
+        }
     }
 }
 
@@ -388,7 +465,7 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
         const fbResp = await axios.post(fbUrl, formData, { headers: formData.getHeaders(), maxContentLength: Infinity, maxBodyLength: Infinity });
 
         // Generate AI comments
-        const aiComments = await generateAIComments(campaign, message);
+        const aiComments = await generateAIComments(campaign, message, OPENAI_API_KEY);
         for (let comment of aiComments) {
             try {
                 await axios.post(`https://graph.facebook.com/v19.0/${fbResp.data.id}/comments`,
@@ -398,7 +475,129 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
             } catch (cErr) { console.error("Error adding comment:", cErr.response?.data || cErr.message); }
         }
 
-        // Save post to DynamoDB
+        // Post to Instagram
+
+
+
+
+
+
+
+
+const IG_USER_ID= process.env.IG_USER_ID; // put your page token in .env
+
+/**
+ * Post media to Instagram (image or reel)
+ * @param {string} mediaUrl - URL of the image or video
+ * @param {string} caption - Caption text
+ */
+
+ caption = message;
+
+
+  //console.log('finalMediaPath:', filesResult[0]);
+  //console.log('finalMediaPath:', filesResult[0].FilePath);
+ mediaUrl = filesResult.recordset[0].FilePath;
+ console.log('mediaUrl:', mediaUrl);
+ console.log('caption:', caption);
+
+  try {
+    let mediaType;
+
+    if (mediaUrl.endsWith(".mp4")) {
+      mediaType = "REELS"; // Instagram only supports reels for video
+    } else {
+      mediaType = "IMAGE";
+    }
+
+    // STEP 1: Create media container
+    const containerRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${IG_USER_ID}/media`,
+      null,
+      {
+        params: {
+          access_token: accessToken,
+          caption: caption, // IG might ignore this for reels, we'll update later
+          ...(mediaType === "IMAGE"
+            ? { image_url: mediaUrl }
+            : { media_type: "REELS", video_url: mediaUrl }),
+        },
+      }
+    );
+
+    const creationId = containerRes.data.id;
+
+     
+ // Add a wait for Reels to avoid 'media not ready' error
+if (mediaType === "REELS") {
+  console.log("⏳ Waiting 30s for Reel to be ready...");
+  await new Promise((r) => setTimeout(r, 30000));
+}
+  
+  console.log("✅ Media ready to publish");
+
+    console.log("✅ Media container created:", creationId);
+
+    // STEP 2: Publish the media
+    const publishRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${IG_USER_ID}/media_publish`,
+      null,
+      {
+        params: {
+          access_token: accessToken,
+          creation_id: creationId,
+        },
+      }
+    );
+
+    const mediaId = publishRes.data.id;
+    console.log("🚀 Published to Instagram with ID:", mediaId);
+
+    // STEP 3: Update caption (only needed for reels, but safe for images too)
+    if (caption) {
+      await axios.post(
+        `https://graph.facebook.com/v21.0/${mediaId}`,
+        null,
+        {
+          params: {
+            access_token: accessToken,
+            caption: caption,
+            comment_enabled: true
+          },
+        }
+      );
+      console.log("✍️ Caption updated for:", mediaId);
+    }
+
+    return mediaId;
+  } catch (err) {
+    console.error("❌ Error posting to Instagram:", err.response?.data || err.message);
+    throw err;
+  }
+
+
+
+
+
+
+
+
+      
+
+ 
+    } catch (err) {
+        console.error('Error processing endorsement:', err);
+        /*
+        if (campaignId && pageId) {
+            try { await createPost({ pageId, timestamp: Date.now(), postId: uuidv4(), campaignId, status: 'failed', errorMessage: err.message }); } 
+            catch (e) { console.error('Failed to log to DynamoDB:', e); }
+        }
+
+        */
+
+        res.status(500).json({ error: 'Failed to process endorsement', details: err.message });
+/*
+               // Save post to DynamoDB
         const postData = {
             pageId,
             timestamp: Date.now(),
@@ -415,18 +614,14 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
             status: 'posted'
          //   aiSummary: aiContent.summary
         };
-        await createPost(postData);
+       await createPost(postData);
 
-        res.status(200).json({ success: true, id: fbResp.data.id, postType: isVideo ? 'video' : 'image', message, aiComments });
+       */
 
-    } catch (err) {
-        console.error('Error processing endorsement:', err);
-        if (campaignId && pageId) {
-            try { await createPost({ pageId, timestamp: Date.now(), postId: uuidv4(), campaignId, status: 'failed', errorMessage: err.message }); } 
-            catch (e) { console.error('Failed to log to DynamoDB:', e); }
-        }
-        res.status(500).json({ error: 'Failed to process endorsement', details: err.message });
+     //   res.status(200).json({ success: true, id: fbResp.data.id, postType: isVideo ? 'video' : 'image', message, aiComments });
+
     } finally { tempFiles.forEach(f => safeUnlink(f)); }
+    
 });
 
 module.exports = router;
