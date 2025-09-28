@@ -144,7 +144,7 @@ function parseAIResponse(content) {
         return {
             format: 'static',
             rationale: 'Default format selected due to parsing error',
-            content: { caption: content.substring(0, 200), hashtags: ['#IEndorseAI'] },
+            content: { caption: content.substring(0, 200), hashtags: ['#iEndorse'] },
             summary: 'Content generated with default settings'
         };
     }
@@ -266,9 +266,10 @@ Requirements:
 //`; // use your existing prompt
 
 
-
 const openAiPrompt = `
-AI content engine for IEndorse. Generate optimized social media captions.
+AI content engine for IEndorse. Generate optimized social media caption.
+
+
 
 ANALYSIS:
 - Product/service, target audience, goals, tone, assets
@@ -281,6 +282,7 @@ CAPTION REQUIREMENTS:
 
 Focus on maximizing engagement.
 `;
+
 
 
 
@@ -366,18 +368,75 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
             tone: campaign.CampaignCategory.includes('Luxury') ? 'professional' : 'energetic'
         };
 
-        // Generate AI content
-        const aiResponse = await openai.chat.completions.create({
-            model: 'gpt-4',
-            messages: [
-                { role: 'system', content: openAiPrompt },
-                { role: 'user', content: JSON.stringify(aiInput) }
-            ],
-            max_tokens: 1000
-        });
 
-        aiContent = parseAIResponse(aiResponse.choices[0].message.content);
-       const { format, content } = aiContent;
+        // Prepare the campaign text
+let campaignText = `${campaign.CampaignTitle}\n${campaign.CampaignDescription}\n${endorsementNote || ''}`;
+
+
+
+// Optional: truncate to stay within token limit for GPT-4
+const MAX_CAMPAIGN_TEXT = 3000; // adjust as needed
+if (campaignText.length > MAX_CAMPAIGN_TEXT) {
+  campaignText = campaignText.slice(0, MAX_CAMPAIGN_TEXT);
+}
+
+// 2️⃣ Create AI prompt
+const openAiPrompt = `
+You are a professional AI content strategist.
+Generate an optimized social media caption based on the campaign info below.
+Respond in JSON format:
+{
+  "caption": "short engaging caption",
+  "hashtags": ["#example", "#campaign"]
+}
+Campaign Info:
+${campaignText}
+`;
+    
+
+// 3️⃣ Call OpenAI
+let aiContent = { caption: campaignText, hashtags: [] };
+
+try {
+  const aiResponse = await openai.chat.completions.create({
+    model: "gpt-4",
+    messages: [
+      {
+        role: "system",
+        content: "You are a professional AI content strategist."
+      },
+      {
+        role: "user",
+        content: openAiPrompt
+      }
+    ],
+    max_tokens: 400,
+    temperature: 0.7
+  });
+
+  // 4️⃣ Parse AI response safely
+  let aiContent;
+  const rawContent = aiResponse?.choices?.[0]?.message?.content || "";
+  try {
+    aiContent = JSON.parse(rawContent); // expecting JSON output
+  } catch (err) {
+    console.warn("AI output could not be parsed. Using raw text as fallback.");
+    aiContent = { caption: rawContent || "No caption generated", hashtags: [] };
+  }
+} catch (err) {
+  console.error("OpenAI API error:", err);
+  return; // stop processing if AI call fails
+}
+
+// 5️⃣ Build final message safely
+const content = aiContent;
+
+
+
+
+      
+
+       
        //  format === 'video'
         // Media processing
       
@@ -417,7 +476,7 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
         const formData = new FormData();
         formData.append('access_token', accessToken);
         formData.append('source', fs.createReadStream(finalMediaPath));
-         const message = `${content.caption }\nLink: ${campaign.CampaignLink}\n${content.hashtags?.join(' ') || ''}`;
+         const message = `${content.caption || ""}\nLink: ${campaign.CampaignLink}\n${content.hashtags?.join(' ') || ''}`;
        
          if (isVideo) {
                 formData.append('description', message); // Not 'message' for video
@@ -505,7 +564,7 @@ const IG_USER_ID= process.env.IG_USER_ID; // put your page token in .env
  // Add a wait for Reels to avoid 'media not ready' error
 if (mediaType === "REELS") {
   console.log("⏳ Waiting 30s for Reel to be ready...");
-  await new Promise((r) => setTimeout(r, 30000));
+  await new Promise((r) => setTimeout(r, 60000));
 }
   
   console.log("✅ Media ready to publish");
