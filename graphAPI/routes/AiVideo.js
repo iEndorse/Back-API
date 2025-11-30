@@ -156,12 +156,53 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
     }
 
     const hasAudio = audioPath && fs.existsSync(audioPath);
-    const transitionDuration = 0.5;
     const durPerImage = totalDuration / imagePaths.length;
 
     console.log(`Creating video with ${imagePaths.length} images, ${durPerImage.toFixed(2)}s each`);
 
-    // Ultra-fast approach: simple scale + fade transitions only
+    // Handle single image case separately (no transitions needed)
+    if (imagePaths.length === 1) {
+        const cmd = ffmpeg();
+        
+        cmd.input(imagePaths[0])
+           .inputOptions(['-loop', '1', '-t', totalDuration.toString()]);
+        
+        if (hasAudio) {
+            cmd.input(audioPath);
+        }
+
+        const outputOpts = [
+            '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30',
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '30',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            '-threads', '0'
+        ];
+
+        if (hasAudio) {
+            outputOpts.push('-c:a', 'aac', '-b:a', '96k', '-shortest');
+        }
+
+        return new Promise((resolve, reject) => {
+            cmd.outputOptions(outputOpts)
+               .output(outputVideoPath)
+               .on('start', () => console.log('Processing single image video...'))
+               .on('end', () => {
+                   console.log('Video created!');
+                   resolve();
+               })
+               .on('error', (err, stdout, stderr) => {
+                   console.error('FFmpeg error:', stderr);
+                   reject(err);
+               })
+               .run();
+        });
+    }
+
+    // Multiple images - use transitions
+    const transitionDuration = 0.5;
     const cmd = ffmpeg();
     
     // Add all images as inputs
@@ -173,7 +214,7 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
         cmd.input(audioPath);
     }
 
-    // Simple filter: scale and fade transitions only (no zoom effects for speed)
+    // Simple filter: scale and fade transitions
     const filterParts = [];
     
     // Scale each image to 1080p
@@ -200,18 +241,18 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
     const outputOpts = [
         '-map', '[vout]',
         '-c:v', 'libx264',
-        '-preset', 'ultrafast', // Fastest preset
-        '-crf', '30', // Lower quality for speed
+        '-preset', 'ultrafast',
+        '-crf', '30',
         '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
-        '-threads', '0' // Use all CPU cores
+        '-threads', '0'
     ];
 
     if (hasAudio) {
         outputOpts.push(
             '-map', `${imagePaths.length}:a`,
             '-c:a', 'aac',
-            '-b:a', '96k', // Lower audio bitrate
+            '-b:a', '96k',
             '-shortest'
         );
     }
@@ -220,7 +261,7 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
 
     await new Promise((resolve, reject) => {
         cmd.on('start', () => {
-            console.log('Processing video (fast mode)...');
+            console.log('Processing video with transitions...');
         })
         .on('progress', (progress) => {
             if (progress.percent) {
@@ -506,3 +547,4 @@ router.get('/ai-video/video/:jobId', (req, res) => {
 });
 
 module.exports = router;
+
