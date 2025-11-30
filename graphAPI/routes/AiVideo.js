@@ -7,7 +7,15 @@ const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
 const { OpenAI } = require('openai');
 
-ffmpeg.setFfmpegPath('/usr/bin/ffmpeg');
+// Resolve ffmpeg binary dynamically (env -> ffmpeg-static -> PATH)
+let resolvedFfmpeg = process.env.FFMPEG_PATH;
+if (!resolvedFfmpeg) {
+    try { resolvedFfmpeg = require('ffmpeg-static'); } catch (_) { /* optional */ }
+}
+if (!resolvedFfmpeg || (path.isAbsolute(resolvedFfmpeg) && !fs.existsSync(resolvedFfmpeg))) {
+    resolvedFfmpeg = 'ffmpeg';
+}
+ffmpeg.setFfmpegPath(resolvedFfmpeg);
 
 const router = express.Router();
 router.use(express.json());
@@ -20,18 +28,12 @@ const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour
 const videoJobs = new Map();
 const upload = multer();
 
-const VOICE_MAP = {
-    Ava: process.env.ELEVENLABS_VOICE_AVA || '21m00Tcm4TlvDq8ikWAM',
-    Noah: process.env.ELEVENLABS_VOICE_NOAH || 'AZnzlk1XvdvUeBnXmlld',
-    Sofia: process.env.ELEVENLABS_VOICE_SOFIA || 'EXAVITQu4vr4xnSDxMaL',
-    Mason: process.env.ELEVENLABS_VOICE_MASON || 'TxGEqnHWrfWFTfGW9XjX'
-};
-
-const TONE_STYLE_MAP = {
-    Friendly: 0.35,
-    Excited: 0.8,
-    Professional: 0.15,
-    Urgent: 0.9
+// Map UI voice labels to OpenAI TTS voices
+const OPENAI_TTS_VOICE_MAP = {
+    Ava: 'alloy',
+    Noah: 'verse',
+    Sofia: 'shimmer',
+    Mason: 'onyx'
 };
 
 function safeUnlink(filePath) {
@@ -134,46 +136,106 @@ function getMediaDuration(mediaPath) {
     });
 }
 
-async function createVideoFromImages(imagePaths, outputVideoPath, totalDuration, audioPath) {
+async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDuration, audioPath) {
     if (!imagePaths.length) throw new Error('No media frames provided');
 
-    const listFile = path.join(TEMP_DIR, `ffmpeg_list_${uuidv4()}.txt`);
-    const durationPerImage = totalDuration / imagePaths.length;
-    let listContent = '';
+    // Verify all input images exist
+    for (const imgPath of imagePaths) {
+        if (!fs.existsSync(imgPath)) {
+            throw new Error(`Image not found: ${imgPath}`);
+        }
+    }
 
-    imagePaths.forEach((img, index) => {
-        listContent += `file '${path.resolve(img).replace(/\\/g, '/')}'\n`;
-        if (index < imagePaths.length - 1) listContent += `duration ${durationPerImage}\n`;
+    // Remove stale output if it exists
+    safeUnlink(outputVideoPath);
+
+    // Ensure output directory exists
+    const outputDir = path.dirname(outputVideoPath);
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    const hasAudio = audioPath && fs.existsSync(audioPath);
+    const transitionDuration = 0.5;
+    const durPerImage = totalDuration / imagePaths.length;
+
+    console.log(`Creating video with ${imagePaths.length} images, ${durPerImage.toFixed(2)}s each`);
+
+    // Ultra-fast approach: simple scale + fade transitions only
+    const cmd = ffmpeg();
+    
+    // Add all images as inputs
+    imagePaths.forEach((imgPath) => {
+        cmd.input(imgPath).inputOptions(['-loop', '1', '-t', durPerImage.toString()]);
     });
-    fs.writeFileSync(listFile, listContent);
+    
+    if (hasAudio) {
+        cmd.input(audioPath);
+    }
+
+    // Simple filter: scale and fade transitions only (no zoom effects for speed)
+    const filterParts = [];
+    
+    // Scale each image to 1080p
+    for (let i = 0; i < imagePaths.length; i++) {
+        filterParts.push(`[${i}:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30[v${i}]`);
+    }
+
+    // Add fade transitions between images
+    let prev = 'v0';
+    let offset = durPerImage - transitionDuration;
+
+    for (let i = 1; i < imagePaths.length; i++) {
+        const cur = `v${i}`;
+        const out = i === imagePaths.length - 1 ? 'vout' : `vx${i}`;
+        filterParts.push(`[${prev}][${cur}]xfade=transition=fade:duration=${transitionDuration}:offset=${offset}[${out}]`);
+        prev = out;
+        offset += durPerImage - transitionDuration;
+    }
+
+    const filterComplex = filterParts.join(';');
+    cmd.complexFilter(filterComplex);
+
+    // Ultra-fast encoding settings
+    const outputOpts = [
+        '-map', '[vout]',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast', // Fastest preset
+        '-crf', '30', // Lower quality for speed
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-threads', '0' // Use all CPU cores
+    ];
+
+    if (hasAudio) {
+        outputOpts.push(
+            '-map', `${imagePaths.length}:a`,
+            '-c:a', 'aac',
+            '-b:a', '96k', // Lower audio bitrate
+            '-shortest'
+        );
+    }
+
+    cmd.outputOptions(outputOpts).output(outputVideoPath);
 
     await new Promise((resolve, reject) => {
-        let command = ffmpeg()
-            .input(listFile)
-            .inputOptions(['-f concat', '-safe 0'])
-            .outputOptions([
-                '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                '-pix_fmt yuv420p',
-                '-r 30',
-                '-vsync cfr',
-                `-t ${totalDuration}`
-            ]);
-
-        if (audioPath && fs.existsSync(audioPath)) {
-            command = command.input(audioPath).audioCodec('aac').outputOptions(['-shortest']);
-        }
-
-        command
-            .output(outputVideoPath)
-            .on('end', () => {
-                fs.unlinkSync(listFile);
-                resolve();
-            })
-            .on('error', (err) => {
-                fs.unlinkSync(listFile);
-                reject(err);
-            })
-            .run();
+        cmd.on('start', () => {
+            console.log('Processing video (fast mode)...');
+        })
+        .on('progress', (progress) => {
+            if (progress.percent) {
+                console.log('Progress: ' + Math.round(progress.percent) + '%');
+            }
+        })
+        .on('end', () => {
+            console.log('Video created!');
+            resolve();
+        })
+        .on('error', (err, stdout, stderr) => {
+            console.error('FFmpeg error:', stderr);
+            reject(err);
+        })
+        .run();
     });
 }
 
@@ -229,43 +291,24 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
     }
 }
 
-async function synthesizeVoiceOver({ script, voice, tone }) {
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    if (!apiKey) throw new Error('ElevenLabs API key missing');
+async function synthesizeVoiceOver({ script, voice, tone, apiKey }) {
+    if (!apiKey) throw new Error('OpenAI API key missing for TTS');
 
-    const voiceId = VOICE_MAP[voice] || process.env.ELEVENLABS_DEFAULT_VOICE_ID;
-    if (!voiceId) throw new Error(`Voice ID not configured for ${voice}`);
-
-    const style = TONE_STYLE_MAP[tone] ?? 0.3;
+    const ttsVoice = OPENAI_TTS_VOICE_MAP[voice] || 'alloy';
+    const openai = new OpenAI({ apiKey });
     const audioPath = path.join(TEMP_DIR, `voice_${uuidv4()}.mp3`);
 
-    const response = await axios({
-        method: 'post',
-        url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        responseType: 'stream',
-        headers: {
-            'xi-api-key': apiKey,
-            'Content-Type': 'application/json',
-            Accept: 'audio/mpeg'
-        },
-        data: {
-            text: script,
-            model_id: 'eleven_multilingual_v2',
-            voice_settings: {
-                stability: 0.25,
-                similarity_boost: 0.75,
-                style
-            }
-        }
+    // Prefix tone to help guide delivery; OpenAI TTS does not have a style knob.
+    const ttsInput = tone ? `Tone: ${tone}. ${script}` : script;
+
+    const response = await openai.audio.speech.create({
+        model: 'gpt-4o-mini-tts',
+        voice: ttsVoice,
+        input: ttsInput
     });
 
-    await new Promise((resolve, reject) => {
-        const writer = fs.createWriteStream(audioPath);
-        response.data.pipe(writer);
-        writer.on('finish', resolve);
-        writer.on('error', reject);
-    });
-
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(audioPath, buffer);
     return audioPath;
 }
 
@@ -349,7 +392,12 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
     let finalVideoPath = null;
 
     try {
-        audioPath = await synthesizeVoiceOver({ script, voice, tone });
+        audioPath = await synthesizeVoiceOver({
+            script,
+            voice,
+            tone,
+            apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
+        });
         const orderedFrames = [];
 
         for (let i = 0; i < media.length; i++) {
@@ -382,11 +430,11 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
         }
 
         const audioDuration = await getMediaDuration(audioPath).catch(() => 0);
-        const fallbackDuration = orderedFrames.length * 4; // 4 seconds per frame
-        const totalDuration = Math.max(audioDuration, fallbackDuration);
+        const fallbackDuration = orderedFrames.length * 4; // only used if audio missing
+        const totalDuration = audioDuration > 0 ? audioDuration : fallbackDuration;
 
         finalVideoPath = path.join(TEMP_DIR, `ai_video_${uuidv4()}.mp4`);
-        await createVideoFromImages(orderedFrames, finalVideoPath, totalDuration, audioPath);
+        await createVideoWithTransitions(orderedFrames, finalVideoPath, totalDuration, audioPath);
         orderedFrames.forEach(safeUnlink);
 
         const job = registerJob({
