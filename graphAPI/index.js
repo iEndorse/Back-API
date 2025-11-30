@@ -20,6 +20,7 @@ const engagementRoutes = require('./routes/engagement');
 const imageTextRoutes = require('./routes/imagetext'); // Import the route
 const ocrRoutes = require('./routes/ocrRoutes');
 const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js'); // Import the route
+const aiVideoRoute = require('./routes/AiVideo.js'); // Import the route
 //const openaiRoutes = require('./routes/ocr-ai'); // Import the route
 // Enable CORS
 //app.use(function (req, res, next) {
@@ -31,6 +32,7 @@ const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js'); // Import the ro
 
 const allowedOrigins = [
   'https://www.iendorse.ng',
+  'https://www.iendorse.ca',
   'https://www.iendorsenow.com'
 ];
 
@@ -210,7 +212,8 @@ app.use('/', imageTextRoutes); // Use the image text route
 app.use('/', ocrRoutes);
 app.use('/', ocropenaiRoutes); // Use the OCR Azure route
 app.use('/', promoteRoutesai);
-//app.use('/', openaiRoutes); // Use the OpenAI route
+app.use('/', aiVideoRoute);
+ //app.use('/', openaiRoutes); // Use the OpenAI route
 
 // Basic route (Note: this is defined twice in your original code)
 app.get('/', (req, res) => {
