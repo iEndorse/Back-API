@@ -282,15 +282,26 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
                     }
                 }
 
-                cmd.outputOptions([
-                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30',
-                    '-t', durPerMedia.toString(),
-                    '-c:v', 'libx264',
-                    '-preset', 'ultrafast',
-                    '-crf', '30',
-                    '-pix_fmt', 'yuv420p',
-                    '-an' // CRITICAL: Remove all audio from source videos/images
-                ])
+   cmd.outputOptions([
+  '-vf',
+  [
+    // 1) Scale to fit inside 1080x1920 without distortion
+    'scale=1080:1920:force_original_aspect_ratio=decrease',
+    // 2) Pad to exactly 1080x1920 (centered)
+    'pad=1080:1920:(1080-iw)/2:(1920-ih)/2',
+    // 3) Fix aspect ratio + format + fps
+    'setsar=1',
+    'format=yuv420p',
+    'fps=30'
+  ].join(','),
+  '-t', durPerMedia.toString(),
+  '-c:v', 'libx264',
+  '-preset', 'ultrafast',
+  '-crf', '30',
+  '-pix_fmt', 'yuv420p',
+  '-an' // still removing source audio
+])
+
                 .output(clipPath)
                 .on('end', () => {
                     processedClips.push(clipPath);
