@@ -408,6 +408,8 @@ Tone: ${tone || 'Friendly'}
 
 Return JSON ONLY in the following format:
 {
+  "title": "punchy 5-10 word video title",
+  "description": "1-2 sentence summary (max ~200 characters) of the story viewers will hear",
   "script": "full script text",
   "talkingPoints": ["bullet 1", "bullet 2"]
 }
@@ -430,7 +432,7 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
             { role: 'user', content: prompt }
         ],
         max_tokens: 500,
-        temperature: 0.7
+        temperature: 1.0
     });
 
     const raw = response?.choices?.[0]?.message?.content?.trim() || '';
@@ -440,12 +442,18 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
         return {
             script: parsed.script.trim(),
             talkingPoints: Array.isArray(parsed.talkingPoints) ? parsed.talkingPoints : [],
+            title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : (campaignTitle || 'AI Video'),
+            description: typeof parsed.description === 'string' && parsed.description.trim()
+                ? parsed.description.trim()
+                : (campaignDescription || scriptContext || ''),
             tokensUsed: response?.usage?.total_tokens || null
         };
     } catch (err) {
         return {
             script: raw,
             talkingPoints: [],
+            title: campaignTitle || 'AI Video',
+            description: campaignDescription || scriptContext || '',
             tokensUsed: response?.usage?.total_tokens || null
         };
     }
@@ -458,8 +466,8 @@ async function synthesizeVoiceOver({ script, voice, tone, apiKey }) {
     const openai = new OpenAI({ apiKey });
     const audioPath = path.join(TEMP_DIR, `voice_${uuidv4()}.mp3`);
 
-    // Prefix tone to help guide delivery; OpenAI TTS does not have a style knob.
-    const ttsInput = tone ? `Tone: ${tone}. ${script}` : script;
+    // Feed the script directly; prefixing the tone gets read aloud.
+    const ttsInput = script;
 
     const response = await openai.audio.speech.create({
         model: 'gpt-4o-mini-tts',
@@ -520,6 +528,8 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
             talkingPoints: scriptResponse.talkingPoints,
             voice,
             tone,
+            title: scriptResponse.title,
+            description: scriptResponse.description,
             tokensUsed: scriptResponse.tokensUsed
         });
     } catch (err) {
