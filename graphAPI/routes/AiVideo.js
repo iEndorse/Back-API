@@ -136,15 +136,8 @@ function getMediaDuration(mediaPath) {
     });
 }
 
-async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDuration, audioPath) {
+async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDuration, audioPath, backgroundMusicPath = null) {
     if (!imagePaths.length) throw new Error('No media frames provided');
-
-    // Verify all input images exist
-    for (const imgPath of imagePaths) {
-        if (!fs.existsSync(imgPath)) {
-            throw new Error(`Image not found: ${imgPath}`);
-        }
-    }
 
     // Remove stale output if it exists
     safeUnlink(outputVideoPath);
@@ -156,23 +149,58 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
     }
 
     const hasAudio = audioPath && fs.existsSync(audioPath);
-    const durPerImage = totalDuration / imagePaths.length;
+    const hasBackgroundMusic = backgroundMusicPath && fs.existsSync(backgroundMusicPath);
+    const durPerMedia = totalDuration / imagePaths.length;
 
-    console.log(`Creating video with ${imagePaths.length} images, ${durPerImage.toFixed(2)}s each`);
+    console.log(`Creating video with ${imagePaths.length} media items, ${durPerMedia.toFixed(2)}s each`);
 
-    // Handle single image case separately (no transitions needed)
+    // Handle single media case
     if (imagePaths.length === 1) {
         const cmd = ffmpeg();
+        const mediaPath = imagePaths[0];
         
-        cmd.input(imagePaths[0])
-           .inputOptions(['-loop', '1', '-t', totalDuration.toString()]);
+        // Check if it's a video by trying to get its properties
+        let isVideo = false;
+        try {
+            const metadata = await new Promise((resolve, reject) => {
+                ffmpeg.ffprobe(mediaPath, (err, data) => {
+                    if (err) reject(err);
+                    else resolve(data);
+                });
+            });
+            
+            // Check if it has a video stream with duration
+            const videoStream = metadata.streams?.find(s => s.codec_type === 'video');
+            isVideo = videoStream && parseFloat(metadata.format?.duration || 0) > 0;
+        } catch (err) {
+            isVideo = false;
+        }
+
+        cmd.input(mediaPath);
+        
+        if (!isVideo) {
+            // It's an image - loop it
+            cmd.inputOptions(['-loop', '1', '-t', totalDuration.toString()]);
+        } else {
+            // It's a video - trim or loop as needed
+            const videoDuration = await getMediaDuration(mediaPath);
+            if (videoDuration < totalDuration) {
+                // Loop video to fill duration
+                cmd.inputOptions(['-stream_loop', Math.ceil(totalDuration / videoDuration).toString()]);
+            }
+        }
         
         if (hasAudio) {
             cmd.input(audioPath);
         }
 
+        if (hasBackgroundMusic) {
+            cmd.input(backgroundMusicPath);
+        }
+
         const outputOpts = [
             '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30',
+            '-t', totalDuration.toString(),
             '-c:v', 'libx264',
             '-preset', 'ultrafast',
             '-crf', '30',
@@ -181,14 +209,23 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
             '-threads', '0'
         ];
 
-        if (hasAudio) {
-            outputOpts.push('-c:a', 'aac', '-b:a', '96k', '-shortest');
+        if (hasAudio && hasBackgroundMusic) {
+            // Mix voiceover with background music
+            // VOLUME ADJUSTMENT: Change 0.15 (background music volume, 15%) and 1.0 (voiceover volume, 100%)
+            const audioFilter = '[1:a]volume=1.0[voice];[2:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];[voice][bg]amix=inputs=2:duration=shortest[aout]';
+            outputOpts.push('-filter_complex', audioFilter, '-map', '0:v', '-map', '[aout]', '-c:a', 'aac', '-b:a', '128k');
+        } else if (hasAudio) {
+            // Map only the voiceover audio, ignore original video audio
+            outputOpts.push('-map', '0:v', '-map', '1:a', '-c:a', 'aac', '-b:a', '96k', '-shortest');
+        } else {
+            // No audio at all
+            outputOpts.push('-an');
         }
 
         return new Promise((resolve, reject) => {
             cmd.outputOptions(outputOpts)
                .output(outputVideoPath)
-               .on('start', () => console.log('Processing single image video...'))
+               .on('start', () => console.log('Processing media...'))
                .on('end', () => {
                    console.log('Video created!');
                    resolve();
@@ -201,83 +238,165 @@ async function createVideoWithTransitions(imagePaths, outputVideoPath, totalDura
         });
     }
 
-    // Multiple images - use transitions
+    // Multiple media items - need to process each differently
     const transitionDuration = 0.5;
-    const cmd = ffmpeg();
+    const processedClips = [];
     
-    // Add all images as inputs
-    imagePaths.forEach((imgPath) => {
-        cmd.input(imgPath).inputOptions(['-loop', '1', '-t', durPerImage.toString()]);
-    });
-    
-    if (hasAudio) {
-        cmd.input(audioPath);
-    }
-
-    // Simple filter: scale and fade transitions
-    const filterParts = [];
-    
-    // Scale each image to 1080p
-    for (let i = 0; i < imagePaths.length; i++) {
-        filterParts.push(`[${i}:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30[v${i}]`);
-    }
-
-    // Add fade transitions between images
-    let prev = 'v0';
-    let offset = durPerImage - transitionDuration;
-
-    for (let i = 1; i < imagePaths.length; i++) {
-        const cur = `v${i}`;
-        const out = i === imagePaths.length - 1 ? 'vout' : `vx${i}`;
-        filterParts.push(`[${prev}][${cur}]xfade=transition=fade:duration=${transitionDuration}:offset=${offset}[${out}]`);
-        prev = out;
-        offset += durPerImage - transitionDuration;
-    }
-
-    const filterComplex = filterParts.join(';');
-    cmd.complexFilter(filterComplex);
-
-    // Ultra-fast encoding settings
-    const outputOpts = [
-        '-map', '[vout]',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '30',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        '-threads', '0'
-    ];
-
-    if (hasAudio) {
-        outputOpts.push(
-            '-map', `${imagePaths.length}:a`,
-            '-c:a', 'aac',
-            '-b:a', '96k',
-            '-shortest'
-        );
-    }
-
-    cmd.outputOptions(outputOpts).output(outputVideoPath);
-
-    await new Promise((resolve, reject) => {
-        cmd.on('start', () => {
-            console.log('Processing video with transitions...');
-        })
-        .on('progress', (progress) => {
-            if (progress.percent) {
-                console.log('Progress: ' + Math.round(progress.percent) + '%');
+    try {
+        // Process each media item (video or image)
+        for (let i = 0; i < imagePaths.length; i++) {
+            const mediaPath = imagePaths[i];
+            const clipPath = path.join(TEMP_DIR, `processed_${i}_${uuidv4()}.mp4`);
+            
+            // Check if it's a video
+            let isVideo = false;
+            let videoDuration = 0;
+            try {
+                const metadata = await new Promise((resolve, reject) => {
+                    ffmpeg.ffprobe(mediaPath, (err, data) => {
+                        if (err) reject(err);
+                        else resolve(data);
+                    });
+                });
+                
+                const videoStream = metadata.streams?.find(s => s.codec_type === 'video');
+                videoDuration = parseFloat(metadata.format?.duration || 0);
+                isVideo = videoStream && videoDuration > 0;
+            } catch (err) {
+                isVideo = false;
             }
-        })
-        .on('end', () => {
-            console.log('Video created!');
-            resolve();
-        })
-        .on('error', (err, stdout, stderr) => {
-            console.error('FFmpeg error:', stderr);
-            reject(err);
-        })
-        .run();
-    });
+
+            console.log(`Processing media ${i + 1}/${imagePaths.length} (${isVideo ? 'video' : 'image'})`);
+
+            await new Promise((resolve, reject) => {
+                const cmd = ffmpeg();
+                cmd.input(mediaPath);
+                
+                if (!isVideo) {
+                    // It's an image - loop it for the duration
+                    cmd.inputOptions(['-loop', '1', '-t', durPerMedia.toString()]);
+                } else {
+                    // It's a video - loop if needed
+                    if (videoDuration > 0 && videoDuration < durPerMedia) {
+                        cmd.inputOptions(['-stream_loop', Math.ceil(durPerMedia / videoDuration).toString()]);
+                    }
+                }
+
+                cmd.outputOptions([
+                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,format=yuv420p,fps=30',
+                    '-t', durPerMedia.toString(),
+                    '-c:v', 'libx264',
+                    '-preset', 'ultrafast',
+                    '-crf', '30',
+                    '-pix_fmt', 'yuv420p',
+                    '-an' // CRITICAL: Remove all audio from source videos/images
+                ])
+                .output(clipPath)
+                .on('end', () => {
+                    processedClips.push(clipPath);
+                    resolve();
+                })
+                .on('error', (err, stdout, stderr) => {
+                    console.error(`Error processing media ${i}:`, stderr);
+                    reject(err);
+                })
+                .run();
+            });
+        }
+
+        console.log('All media processed, adding transitions...');
+
+        // Now concatenate with transitions
+        const cmd = ffmpeg();
+        processedClips.forEach(clip => cmd.input(clip));
+        
+        if (hasAudio) {
+            cmd.input(audioPath);
+        }
+
+        if (hasBackgroundMusic) {
+            cmd.input(backgroundMusicPath);
+        }
+
+        // Build filter for transitions (and optionally audio mix)
+        const filterParts = [];
+        
+        // Label each input
+        for (let i = 0; i < processedClips.length; i++) {
+            filterParts.push(`[${i}:v]null[v${i}]`);
+        }
+
+        // Add fade transitions
+        let prev = 'v0';
+        let offset = durPerMedia - transitionDuration;
+
+        for (let i = 1; i < processedClips.length; i++) {
+            const cur = `v${i}`;
+            const out = i === processedClips.length - 1 ? 'vout' : `vx${i}`;
+            filterParts.push(`[${prev}][${cur}]xfade=transition=fade:duration=${transitionDuration}:offset=${offset}[${out}]`);
+            prev = out;
+            offset += durPerMedia - transitionDuration;
+        }
+
+        const filterSegments = [filterParts.join(';')];
+
+        const outputOpts = [
+            '-map', '[vout]',
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '30',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            '-threads', '0'
+        ];
+
+        if (hasAudio && hasBackgroundMusic) {
+            // Mix voiceover with background music
+            // VOLUME ADJUSTMENT: Change 0.15 (background music volume, 15%) and 1.0 (voiceover volume, 100%)
+            const audioFilter = `[${processedClips.length}:a]volume=1.0[voice];[${processedClips.length + 1}:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];[voice][bg]amix=inputs=2:duration=shortest[aout]`;
+            filterSegments.push(audioFilter);
+            cmd.complexFilter(filterSegments.join(';'));
+            outputOpts.push('-map', '[aout]', '-c:a', 'aac', '-b:a', '128k');
+        } else if (hasAudio) {
+            cmd.complexFilter(filterSegments.join(';'));
+            // Map the voiceover audio (last input)
+            outputOpts.push(
+                '-map', `${processedClips.length}:a`,
+                '-c:a', 'aac',
+                '-b:a', '96k',
+                '-shortest'
+            );
+        } else {
+            cmd.complexFilter(filterSegments.join(';'));
+        }
+
+        cmd.outputOptions(outputOpts).output(outputVideoPath);
+
+        await new Promise((resolve, reject) => {
+            cmd.on('start', () => console.log('Creating final video with voiceover...'))
+               .on('progress', (progress) => {
+                   if (progress.percent) {
+                       console.log('Progress: ' + Math.round(progress.percent) + '%');
+                   }
+               })
+               .on('end', () => {
+                   console.log('Video created!');
+                   resolve();
+               })
+               .on('error', (err, stdout, stderr) => {
+                   console.error('FFmpeg error:', stderr);
+                   reject(err);
+               })
+               .run();
+        });
+
+        // Cleanup processed clips
+        processedClips.forEach(safeUnlink);
+
+    } catch (error) {
+        processedClips.forEach(clip => clip && safeUnlink(clip));
+        throw error;
+    }
 }
 
 function buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone }) {
@@ -410,7 +529,7 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
 });
 
 router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
-    let { script, voice = 'Ava', tone = 'Friendly', media } = req.body;
+    let { script, voice = 'Ava', tone = 'Friendly', media, backgroundMusic } = req.body;
 
     if (!script || typeof script !== 'string') {
         return res.status(400).json({ error: 'Script text is required' });
@@ -430,6 +549,7 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
 
     const tempFiles = [];
     let audioPath = null;
+    let backgroundMusicPath = null;
     let finalVideoPath = null;
 
     try {
@@ -439,44 +559,54 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
             tone,
             apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
         });
-        const orderedFrames = [];
+        
+        // Handle background music: use provided filename or pick random from uploads/audio
+        const audioDir = path.join(__dirname, '..', 'uploads', 'audio');
+        if (!backgroundMusic && fs.existsSync(audioDir)) {
+            const candidates = (fs.readdirSync(audioDir) || []).filter(name =>
+                name.toLowerCase().match(/\.(mp3|wav|m4a|aac)$/)
+            );
+            if (candidates.length) {
+                backgroundMusic = candidates[Math.floor(Math.random() * candidates.length)];
+            }
+        }
 
+        if (backgroundMusic) {
+            const musicFile = path.join(audioDir, backgroundMusic);
+            if (fs.existsSync(musicFile)) {
+                backgroundMusicPath = musicFile;
+                console.log('Using background music:', backgroundMusic);
+            } else {
+                console.warn('Background music file not found:', backgroundMusic);
+            }
+        }
+        
+        const mediaPaths = [];
+
+        // Download all media files
         for (let i = 0; i < media.length; i++) {
             const mediaItem = media[i];
             if (!mediaItem?.filePath) continue;
 
             const localPath = await downloadFileIfNeeded(mediaItem.filePath);
             tempFiles.push(localPath);
-
-            const video = isVideoFile(mediaItem.filePath, mediaItem.fileType);
-            let framePath = localPath;
-
-            if (video) {
-                const stillPath = path.join(TEMP_DIR, `frame_${i}_${uuidv4()}.png`);
-                await extractFrameFromVideo(localPath, stillPath);
-                framePath = stillPath;
-            }
-
-            if (!framePath.endsWith('.png')) {
-                const pngPath = path.join(TEMP_DIR, `img_${i}_${uuidv4()}.png`);
-                await convertImageToPng(framePath, pngPath);
-                framePath = pngPath;
-            }
-
-            orderedFrames.push(framePath);
+            
+            // Keep videos as videos, images as images
+            mediaPaths.push(localPath);
         }
 
-        if (!orderedFrames.length) {
+        if (!mediaPaths.length) {
             throw new Error('No usable media files were provided');
         }
 
         const audioDuration = await getMediaDuration(audioPath).catch(() => 0);
-        const fallbackDuration = orderedFrames.length * 4; // only used if audio missing
+        const fallbackDuration = mediaPaths.length * 4;
         const totalDuration = audioDuration > 0 ? audioDuration : fallbackDuration;
 
         finalVideoPath = path.join(TEMP_DIR, `ai_video_${uuidv4()}.mp4`);
-        await createVideoWithTransitions(orderedFrames, finalVideoPath, totalDuration, audioPath);
-        orderedFrames.forEach(safeUnlink);
+        
+        // Pass the actual media files (videos and images) and background music to the function
+        await createVideoWithTransitions(mediaPaths, finalVideoPath, totalDuration, audioPath, backgroundMusicPath);
 
         const job = registerJob({
             filePath: finalVideoPath,
@@ -494,7 +624,8 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
             voice,
             tone,
             script,
-            duration: totalDuration
+            duration: totalDuration,
+            backgroundMusic: backgroundMusic || null
         });
     } catch (err) {
         console.error('AI video generation error:', err);
@@ -547,4 +678,3 @@ router.get('/ai-video/video/:jobId', (req, res) => {
 });
 
 module.exports = router;
-
