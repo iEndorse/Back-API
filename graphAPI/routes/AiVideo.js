@@ -426,7 +426,7 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
     const response = await openai.chat.completions.create({
         model: 'gpt-4',
         messages: [
-            { role: 'system', content: 'You are a seasoned creative director who writes voice-over scripts.' },
+            { role: 'system', content: 'You are a seasoned creative director who writes voice-over scripts like a story of their journey. Do not mention the name of the tone or voice' },
             { role: 'user', content: prompt }
         ],
         max_tokens: 500,
