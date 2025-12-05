@@ -106,8 +106,17 @@ app.use('/', facebookRoutesvideo2); // Mount the routes at the root path
 app.use('/', facebookRoutesvideoV1); // Mount the routes at the root path
 
 // Start the server
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
-});
+//app.listen(port, () => {
+ // console.log(`Server listening on port ${port}`);
+//});
+
+// Only start server if not in Lambda
+if (process.env.AWS_EXECUTION_ENV === undefined) {
+    app.listen(3000, () => {
+        console.log('Server running on port 3000');
+    });
+}
+
+module.exports = app;
 
 

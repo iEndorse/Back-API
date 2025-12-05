@@ -30,6 +30,7 @@
     "playwright-firefox": "^1.52.0",
     "puppeteer": "^24.6.1",
     "puppeteer-core": "^24.6.1",
+    "serverless-http": "^4.0.0",
     "tesseract.js": "^6.0.1"
   },
   "devDependencies": {
