@@ -3,10 +3,21 @@ const router = express.Router();
 const AWS = require('aws-sdk');
 
 // Configure the AWS SDK
-AWS.config.update({
-  region: 'us-east-1', // Replace with your AWS region
-});
 
+
+if (!process.env.AWS_EXECUTION_ENV) {
+    // Local dev ONLY
+    AWS.config.update({
+        region: 'us-east-1',
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    });
+} else {
+    // Lambda – rely on role/region
+    AWS.config.update({
+        region: process.env.AWS_REGION || 'us-east-1',
+    });
+  }
 // Create a DynamoDB client
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
 

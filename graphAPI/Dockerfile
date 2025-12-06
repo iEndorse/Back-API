@@ -14,6 +14,7 @@ COPY package*.json ./
 
 # Install dependencies
 RUN npm ci --omit=dev
+RUN rm -f .env
 
 # Copy application code
 COPY . ./

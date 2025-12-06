@@ -25,11 +25,21 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // DynamoDB setup
-AWS.config.update({
-    region: 'us-east-1',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-});
+const AWS = require('aws-sdk');
+
+if (!process.env.AWS_EXECUTION_ENV) {
+    // Local dev ONLY
+    AWS.config.update({
+        region: 'us-east-1',
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    });
+} else {
+    // Lambda – rely on role/region
+    AWS.config.update({
+        region: process.env.AWS_REGION || 'us-east-1',
+    });
+}
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = 'FacebookPosts';
 

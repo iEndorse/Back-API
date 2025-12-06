@@ -21,11 +21,20 @@ const adAccountId = process.env.AD_ACCOUNT_ID;
 
 // DynamoDB setup
 const AWS = require('aws-sdk');
-AWS.config.update({
-    region: 'us-east-1',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-});
+
+if (!process.env.AWS_EXECUTION_ENV) {
+    // Local dev ONLY
+    AWS.config.update({
+        region: 'us-east-1',
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    });
+} else {
+    // Lambda – rely on role/region
+    AWS.config.update({
+        region: process.env.AWS_REGION || 'us-east-1',
+    });
+}
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = 'FacebookPosts';
 

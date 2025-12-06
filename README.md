@@ -30,7 +30,7 @@ module.exports.handler = serverless(app);
 # Install serverless-http
 npm install serverless-http
 
-Modify your server.js from
+# Modify your server.js from
 app.listen(3000, () => {
     console.log('Server running on port 3000');
 });
@@ -96,6 +96,115 @@ aws lambda update-function-code \
     --image-uri 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest \
     --region us-east-1
 
+# 1, Test the Lambda function
+aws lambda invoke \
+    --function-name ai-video-app \
+    --payload '{"httpMethod":"GET","path":"/health","headers":{},"body":null}' \
+    --region us-east-1 \
+    response.json
+
+cat response.json
+
+
+# 2. Create a Function URL (simplest way to access your API)
+# Create Function URL
+aws lambda create-function-url-config \
+    --function-name ai-video-app \
+    --auth-type NONE \
+    --region us-east-1
+
+# Add public access permission
+aws lambda add-permission \
+    --function-name ai-video-app \
+    --statement-id FunctionURLAllowPublicAccess \
+    --action lambda:InvokeFunctionUrl \
+    --principal "*" \
+    --function-url-auth-type NONE \
+    --region us-east-1
+
+# Get the URL
+aws lambda get-function-url-config --function-name ai-video-app --region us-east-1
+
+ # "FunctionUrl": "https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/",
+
+# test
+curl https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/Health
+ 
+
+# 
+# Let's give access to all parameters under /iEndorse/:
+# Give lambda access to parameter store
+# Update the policy for all iEndorse parameters
+cat > ssm-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": "arn:aws:ssm:us-east-1:730335624385:parameter/iEndorse/*"
+    }
+  ]
+}
+EOF
+
+# Apply the updated policy
+aws iam put-role-policy \
+    --role-name ai-video-app-role \
+    --policy-name SSMParameterAccess \
+    --policy-document file://ssm-policy.json
+
+
+# Verify the policy is created
+aws iam list-role-policies --role-name ai-video-app-role
+
+
+
+
+# Rebuild and push:
+docker build -t ai-video-app .
+docker tag ai-video-app:latest 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest
+docker push 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest
+
+# if authorization, login to ecr again
+
+# Update Lambda:
+aws lambda update-function-code \
+    --function-name ai-video-app \
+    --image-uri 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest \
+    --region us-east-1
+
+
+
+#####
+
+
+# Full rebuild and deploy with no catch:
+
+docker build --no-cache -t ai-video-app .
+
+# Tag
+docker tag ai-video-app:latest 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest
+
+# Login
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 730335624385.dkr.ecr.us-east-1.amazonaws.com
+
+# Push
+docker push 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest
+
+# Update Lambda
+aws lambda update-function-code \
+    --function-name ai-video-app \
+    --image-uri 730335624385.dkr.ecr.us-east-1.amazonaws.com/iendorse:latest \
+    --region us-east-1
+
+# Wait and test
+sleep 30
+curl https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/health
 
 
 
@@ -105,7 +214,7 @@ docker inspect ai-video-app | grep Architecture
 
 
  # Clean the current image
-aws ecr batch-delete-image --repository-name fastapi-backend --region us-east-1 --image-ids imageTag=latest
+aws ecr batch-delete-image --repository-name iendorse --region us-east-1 --image-ids imageTag=latest
 
 
 aws ecr list-images --repository-name fastapi-backend --region us-east-1 --query 'imageIds[*]' --output json | \

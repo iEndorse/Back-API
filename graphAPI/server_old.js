@@ -1,0 +1,174 @@
+//require('dotenv').config(); // Load environment variables
+if (!process.env.AWS_EXECUTION_ENV) {
+  // Only in local dev, not in Lambda
+  require('dotenv').config();
+}
+const cors = require('cors');
+const express = require('express');
+const app = express();
+const AWS = require('aws-sdk');
+const port = 5000;
+const facebookRoutesphotoV1 = require('./routes/facebookAPIphotoV1'); // Import the route
+const facebookRoutesvideo = require('./routes/facebookAPIvideo'); // Import the route
+const facebookRoutesvideo2 = require('./routes/facebookAPIvideo2'); // Import the route
+const facebookRoutesvideoV1 = require('./routes/facebookAPIvideoV1'); // Import the route
+
+// Enable CORS
+app.use(function (req, res, next) {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+    next();
+});
+
+// Middleware (Important:  Body parsing BEFORE routes)
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Configure the AWS SDK
+// AWS.config.update({
+//   region: 'us-east-1',
+//   accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Required for all types of testing
+//   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+// });
+
+
+// Configure the AWS SDK
+// Configure the AWS SDK - uses execution role in Lambda, env vars locally
+AWS.config.update({
+  region: 'us-east-1'
+});
+
+
+const ssm = new AWS.SSM();
+
+async function getAccessToken() {
+  const params = {
+    Name: '/iEndorse/Production/AccessToken',
+    WithDecryption: true,
+  };
+
+  try {
+    const data = await ssm.getParameter(params).promise();
+    console.log("Successfully retrieved from Parameter Store")
+    return data.Parameter.Value;
+  } catch (err) {
+    console.error('Error retrieving access token from SSM:', err);
+    throw err; // Re-throw the error to be caught later
+  }
+}
+
+// Load the Access Token
+// let accessToken = null;
+// let tokenInitialized = false;
+
+// // Initialize and Refresh the token
+// async function initializeAccessToken() {
+//     try {
+//         accessToken = await getAccessToken();
+//         console.log('Access Token Retrieved during initialization:', accessToken); // Add for verification
+//     } catch (error) {
+//         console.error('Failed to retrieve access token during initialization, shutting down:', error);
+//         process.exit(1); // Exit the application if it fails to load the token
+//     }
+// }
+
+// // Call the function to initialize, to set up and load the keys at the top scope
+// initializeAccessToken();
+
+
+// Load the Access Token
+// Load the Access Token
+let accessToken = null;
+let tokenInitialized = false;
+
+// Initialize and Refresh the token
+async function initializeAccessToken() {
+    console.log('Starting token initialization...');
+    console.log('AWS_EXECUTION_ENV:', process.env.AWS_EXECUTION_ENV);
+    console.log('AWS Region:', AWS.config.region);
+    
+    try {
+        accessToken = await getAccessToken();
+        tokenInitialized = true;
+        console.log('Access Token Retrieved during initialization');
+    } catch (error) {
+        console.error('Failed to retrieve access token during initialization:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+        tokenInitialized = false;
+    }
+}
+
+// Initialize immediately
+console.log('About to initialize access token...');
+const initPromise = initializeAccessToken();
+
+// Middleware to ensure token is loaded before processing requests
+app.use(async (req, res, next) => {
+    console.log('Middleware check - tokenInitialized:', tokenInitialized);
+    if (!tokenInitialized) {
+        console.log('Waiting for token initialization...');
+        await initPromise;
+        console.log('Token initialization complete, tokenInitialized:', tokenInitialized);
+    }
+    next();
+});
+
+// Set interval to check the token every 10 minutes (600000 ms)
+setInterval(async () => {
+    try {
+        accessToken = await getAccessToken();
+        console.log('Access Token Refreshed:', accessToken);
+    } catch (error) {
+        console.error('Failed to refresh access token:', error);
+    }
+}, 600000);
+
+// HEALTH CHECK ROUTE - Define this BEFORE other middleware that might block it
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'healthy', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        port: port, // Fixed: use the port variable, not process.env.port
+        accessTokenLoaded: !!accessToken // Shows if token is loaded without exposing it
+    });
+});
+
+app.get('/', (req, res) => {
+  if (!accessToken) {
+    return res.status(500).send('Application failed to initialize: Access Token missing.');
+  }
+  res.send(`Hello World!  Access Token: ${accessToken}, Page ID: ${process.env.PAGE_ID}`);
+});
+
+// Middleware to inject accessToken
+app.use((req, res, next) => {
+    if (!accessToken) {
+        return res.status(500).send('Application failed to initialize: Access Token missing.');
+    }
+    req.accessToken = accessToken;
+    next();
+});
+
+// Use the Facebook API routes
+app.use('/', facebookRoutesphotoV1); // Mount the routes at the root path
+app.use('/', facebookRoutesvideo); // Mount the routes at the root path
+app.use('/', facebookRoutesvideo2); // Mount the routes at the root path
+app.use('/', facebookRoutesvideoV1); // Mount the routes at the root path
+
+// Start the server
+//app.listen(port, () => {
+ // console.log(`Server listening on port ${port}`);
+//});
+
+// Only start server if not in Lambda
+if (process.env.AWS_EXECUTION_ENV === undefined) {
+    app.listen(3000, () => {
+        console.log('Server running on port 3000');
+    });
+}
+
+module.exports = app;
+
+

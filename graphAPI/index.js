@@ -5,7 +5,7 @@ const app = express();
 const AWS = require('aws-sdk');
 const { OpenAI } = require('openai');
 const port =process.env.port || 4000;
-const facebookRoutesphotoV1 = require('./routes/facebookAPIphotoV1'); // Import the route
+
 const facebookRoutesvideo = require('./routes/facebookAPIvideo'); // Import the route
 const facebookRoutesvideo2 = require('./routes/facebookAPIvideo2'); // Import the route
 const facebookRoutesvideoV1 = require('./routes/facebookAPIvideoV1'); // Import the route
@@ -66,11 +66,28 @@ app.use(express.json()); // For JSON data
 
 // Configure the AWS SDK
 // Configure the AWS SDK
-AWS.config.update({
-  region: 'us-east-1',
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Required for all types of testing
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-});
+// AWS.config.update({
+//   region: 'us-east-1',
+//   accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Required for all types of testing
+//   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+// });
+
+
+
+if (!process.env.AWS_EXECUTION_ENV) {
+    // Local dev ONLY
+    AWS.config.update({
+        region: 'us-east-1',
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    });
+} else {
+    // Lambda – rely on role/region
+    AWS.config.update({
+        region: process.env.AWS_REGION || 'us-east-1',
+    });
+  }
+
 const ssm = new AWS.SSM();
 
 async function getAccessToken() {
@@ -198,7 +215,7 @@ async function connectToDatabase() {
 }
 
 // Define the routes
-app.use('/', facebookRoutesphotoV1);
+
 app.use('/', facebookRoutesvideo);
 app.use('/', facebookRoutesvideo2);
 app.use('/', facebookRoutesvideoV1);
@@ -220,6 +237,7 @@ app.get('/', (req, res) => {
   res.send('API is running');
 });
 
+module.exports = app;
 // Initialize the database and start the server
 connectToDatabase()
   .then(pool => {
@@ -227,9 +245,18 @@ connectToDatabase()
     app.locals.db = pool;
     
     // Start the server
-    app.listen(port, () => {
-      console.log(`Server running on port ${port}`);
+    // app.listen(port, () => {
+    //   console.log(`Server running on port ${port}`);
+    // });
+
+    // Only start server if not in Lambda
+if (process.env.AWS_EXECUTION_ENV === undefined) {
+    app.listen(3000, () => {
+        console.log('Server running on port 3000');
     });
+}
+
+
   })
   .catch(err => {
     console.error('Failed to initialize database connection:', err);
