@@ -128,7 +128,7 @@ aws lambda get-function-url-config --function-name ai-video-app --region us-east
  # "FunctionUrl": "https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/",
 
 # test
-curl https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/Health
+# curl https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/Health
  
 
 # 
@@ -203,14 +203,18 @@ aws lambda update-function-code \
     --region us-east-1
 
 # Wait and test
-sleep 30
+sleep 60
 curl https://yya7zxdhar2mh6txpk64gru6va0lxawu.lambda-url.us-east-1.on.aws/health
 
 
 
 # Check the image architecture
 docker inspect ai-video-app | grep Architecture
-# Build
+
+
+
+# Delete old Docker images (big culprit in Codespaces)
+docker system prune -a -f
 
 
  # Clean the current image
