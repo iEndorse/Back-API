@@ -59,53 +59,107 @@ const OPENAI_TTS_VOICE_MAP = {
 
 
 // Route to generate voice sample
-router.post('/ai-video/voice-sample', async (req, res) => {
-    const { voice = 'alloy' } = req.body;
+// router.post('/ai-video/voice-sample', async (req, res) => {
+//     const { voice = 'alloy' } = req.body;
 
-    // OpenAI TTS available voices: alloy, echo, fable, onyx, nova, shimmer
-    const voiceMap = {
+//     // OpenAI TTS available voices: alloy, echo, fable, onyx, nova, shimmer
+//     const voiceMap = {
+//     Ava: 'alloy',
+//     Noah: 'echo',
+//     Sofia: 'shimmer',
+//     Mason: 'onyx'
+//     };
+
+//    // const openaiVoice = voiceMap[voice] || voiceMap['default'];
+   
+//     const openaiVoice = voiceMap[voice] || voiceMap.Ava || 'alloy';
+
+
+
+//     try {
+//         const openai = new OpenAI({
+//             apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
+//         });
+
+//         console.log(`Generating voice sample for ${voice} (${openaiVoice})`);
+
+//         // Generate speech
+//         const mp3 = await openai.audio.speech.create({
+//             model: "tts-1", // or "tts-1-hd" for higher quality
+//             voice: openaiVoice,
+//             input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
+//         });
+
+//         // Convert to buffer
+//         const buffer = Buffer.from(await mp3.arrayBuffer());
+
+//         // Set response headers for audio
+//         res.set({
+//             'Content-Type': 'audio/mpeg',
+//             'Content-Length': buffer.length,
+//             'Content-Disposition': `inline; filename="voice-sample-${voice}.mp3"`
+//         });
+
+//         // Send the audio buffer
+//         res.send(buffer);
+
+//     } catch (error) {
+//         console.error('Error generating voice sample:', error);
+//         res.status(500).json({ 
+//             error: 'Failed to generate voice sample',
+//             details: error.message 
+//         });
+//     }
+// });
+
+
+
+
+router.post('/ai-video/voice-sample', async (req, res) => {
+  const { voice = 'alloy' } = req.body;
+
+  // UI labels -> OpenAI voice ids
+  const voiceMap = {
     Ava: 'alloy',
     Noah: 'echo',
     Sofia: 'shimmer',
-    Mason: 'onyx'
-    };
+    Mason: 'onyx',
+  };
 
-    const openaiVoice = voiceMap[voice] || voiceMap['default'];
+  const allowedVoices = new Set(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']);
+  const openaiVoice = allowedVoices.has(voice) ? voice : (voiceMap[voice] || 'alloy');
 
-    try {
-        const openai = new OpenAI({
-            apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
-        });
+  try {
+    const openai = new OpenAI({
+      apiKey: req.openai_api_key || process.env.OPENAI_API_KEY,
+    });
 
-        console.log(`Generating voice sample for ${voice} (${openaiVoice})`);
+    console.log(`Generating voice sample for "${voice}" -> "${openaiVoice}"`);
 
-        // Generate speech
-        const mp3 = await openai.audio.speech.create({
-            model: "tts-1", // or "tts-1-hd" for higher quality
-            voice: openaiVoice,
-            input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
-        });
+    const mp3 = await openai.audio.speech.create({
+      model: 'tts-1',
+      voice: openaiVoice,
+      input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
+    });
 
-        // Convert to buffer
-        const buffer = Buffer.from(await mp3.arrayBuffer());
+    const buffer = Buffer.from(await mp3.arrayBuffer());
 
-        // Set response headers for audio
-        res.set({
-            'Content-Type': 'audio/mpeg',
-            'Content-Length': buffer.length,
-            'Content-Disposition': `inline; filename="voice-sample-${voice}.mp3"`
-        });
+  res.set({
+  "Content-Type": "audio/mpeg",
+  "Content-Disposition": `inline; filename="voice-sample-${openaiVoice}.mp3"`,
+  "Cache-Control": "no-store",
+});
 
-        // Send the audio buffer
-        res.send(buffer);
+return res.status(200).end(buffer);
 
-    } catch (error) {
-        console.error('Error generating voice sample:', error);
-        res.status(500).json({ 
-            error: 'Failed to generate voice sample',
-            details: error.message 
-        });
-    }
+
+  } catch (error) {
+    console.error('Error generating voice sample:', error);
+    return res.status(500).json({
+      error: 'Failed to generate voice sample',
+      details: error?.message || String(error),
+    });
+  }
 });
 
 
