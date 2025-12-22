@@ -203,17 +203,66 @@ async function connectToDatabase() {
     await initPromise;
   }
   
-  const pool = new sql.ConnectionPool(getDbConfig());
+  const config = getDbConfig();
+  console.log('Attempting database connection to:', config.server);
+  
+  const pool = new sql.ConnectionPool(config);
   
   try {
     await pool.connect();
     console.log('Connected to SQL Server database');
+    
+    // Add connection error handler
+    pool.on('error', err => {
+      console.error('Database pool error:', err);
+    });
+    
     return pool;
   } catch (err) {
     console.error('Database connection failed:', err);
+    console.error('Error details:', {
+      code: err.code,
+      message: err.message
+    });
     throw err;
   }
 }
+
+// ===== OPTION 1: MIDDLEWARE TO ENSURE DATABASE CONNECTION =====
+app.use(async (req, res, next) => {
+  // Skip database check for health endpoint
+  if (req.path === '/health' || req.path === '/') {
+    return next();
+  }
+
+  // Check if database connection exists and is connected
+  if (!app.locals.db || !app.locals.db.connected) {
+    console.log('Database not connected, attempting to reconnect...');
+    try {
+      // Close existing connection if any
+      if (app.locals.db) {
+        try {
+          await app.locals.db.close();
+        } catch (closeErr) {
+          console.log('Error closing existing pool:', closeErr.message);
+        }
+      }
+      
+      // Create new connection
+      app.locals.db = await connectToDatabase();
+      console.log('Database reconnected successfully');
+    } catch (error) {
+      console.error('Failed to reconnect to database:', error);
+      return res.status(500).json({ 
+        error: 'Database connection failed',
+        details: error.message 
+      });
+    }
+  }
+  
+  next();
+});
+// ===== END DATABASE RECONNECTION MIDDLEWARE =====
 
 // Define the routes
 app.use('/', facebookRoutesvideo);
@@ -237,17 +286,25 @@ connectToDatabase()
   .then(pool => {
     // Make the pool available to routes
     app.locals.db = pool;
+    console.log('Database pool set in app.locals');
     
     // Only start server if not in Lambda
     if (process.env.AWS_EXECUTION_ENV === undefined) {
       app.listen(port, () => {
         console.log(`Server running on port ${port}`);
       });
+    } else {
+      console.log('Running in Lambda - server not started');
     }
   })
   .catch(err => {
     console.error('Failed to initialize database connection:', err);
-    process.exit(1);
+    // In Lambda, don't exit - let the middleware handle reconnection
+    if (process.env.AWS_EXECUTION_ENV === undefined) {
+      process.exit(1);
+    } else {
+      console.log('Lambda will attempt reconnection on next request');
+    }
   });
 
 // Handle application shutdown

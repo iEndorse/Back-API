@@ -7,6 +7,7 @@ const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
 const { OpenAI } = require('openai');
 const AWS = require('aws-sdk');
+const sql = require('mssql');
 
 // Resolve ffmpeg binary dynamically (env -> ffmpeg-static -> PATH)
 let resolvedFfmpeg = process.env.FFMPEG_PATH;
@@ -52,6 +53,61 @@ const OPENAI_TTS_VOICE_MAP = {
     Sofia: 'shimmer',
     Mason: 'onyx'
 };
+
+
+
+
+
+// Route to generate voice sample
+router.post('/ai-video/voice-sample', async (req, res) => {
+    const { voice = 'alloy' } = req.body;
+
+    // OpenAI TTS available voices: alloy, echo, fable, onyx, nova, shimmer
+    const voiceMap = {
+    Ava: 'alloy',
+    Noah: 'echo',
+    Sofia: 'shimmer',
+    Mason: 'onyx'
+    };
+
+    const openaiVoice = voiceMap[voice] || voiceMap['default'];
+
+    try {
+        const openai = new OpenAI({
+            apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
+        });
+
+        console.log(`Generating voice sample for ${voice} (${openaiVoice})`);
+
+        // Generate speech
+        const mp3 = await openai.audio.speech.create({
+            model: "tts-1", // or "tts-1-hd" for higher quality
+            voice: openaiVoice,
+            input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
+        });
+
+        // Convert to buffer
+        const buffer = Buffer.from(await mp3.arrayBuffer());
+
+        // Set response headers for audio
+        res.set({
+            'Content-Type': 'audio/mpeg',
+            'Content-Length': buffer.length,
+            'Content-Disposition': `inline; filename="voice-sample-${voice}.mp3"`
+        });
+
+        // Send the audio buffer
+        res.send(buffer);
+
+    } catch (error) {
+        console.error('Error generating voice sample:', error);
+        res.status(500).json({ 
+            error: 'Failed to generate voice sample',
+            details: error.message 
+        });
+    }
+});
+
 
 function safeUnlink(filePath) {
     if (filePath && fs.existsSync(filePath)) {
@@ -338,7 +394,7 @@ async function createVideoWithTransitions(
   }
 
   // ---------- MULTIPLE MEDIA CASE ----------
-  const transitionDuration = 0.5;
+  const transitionDuration = 2.5;
   const processedClips = [];
 
   try {
@@ -570,7 +626,7 @@ async function createVideoWithTransitions(
 function buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone }) {
     return `
 You are an AI video copywriter for IEndorse campaigns.
-Write a short but punchy video script using the details below.
+Write a short but punchy video script that ALWAYS includes the company name inside the video title using the details below.
 Voice Talent: ${voice || 'Default'}
 Tone: ${tone || 'Friendly'}
 
@@ -582,16 +638,70 @@ Return JSON ONLY in the following format:
   "talkingPoints": ["bullet 1", "bullet 2"]
 }
 
-Campaign Title: ${campaignTitle || 'Untitled Campaign'}
+Campaign Title (MUST include company name): ${campaignTitle || 'Untitled Campaign'}
 Campaign Description: ${campaignDescription || 'N/A'}
 Additional Context: ${scriptContext || 'N/A'}
 `;
 }
 
-async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescription, scriptContext, voice, tone }) {
+//////////
+// Define the cost
+const SCRIPT_GENERATION_COST = 20;
+const VIDEO_GENERATION_COST = 50;
+
+async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescription, scriptContext, voice, tone, accountId, pool }) {
+
+    // Check for wallet unit availability
+    if (!pool) {
+        console.error("Database connection not available!");
+        throw new Error('Database connection not available.');
+    }
+
+    if (!accountId) {
+        throw new Error('Account ID is required.');
+    }
+
+    // Query to retrieve account wallet information
+    const walletQuery = `
+        SELECT
+            a.Id,
+            a.WalletUnits
+        FROM
+            Accounts AS a
+        WHERE
+            a.Id = @accountId;
+    `;
+
+    console.log("Executing database query with accountId:", accountId);
+
+    // Execute the query with parameterized input
+    const result = await pool.request()
+        .input('accountId', sql.Int, parseInt(accountId, 10))
+        .query(walletQuery);
+
+    console.log("Query result count:", result.recordset.length);
+
+    if (result.recordset.length === 0) {
+        throw new Error('Account not found.');
+    }
+
+    const account = result.recordset[0];
+    console.log("Account found:", account.Id);
+    console.log("Wallet units:", account.WalletUnits);
+
+    // Check if wallet has sufficient units
+    if (account.WalletUnits < SCRIPT_GENERATION_COST) {
+        throw new Error(`Insufficient wallet units. You have ${account.WalletUnits} units but need ${SCRIPT_GENERATION_COST} units to generate a script.`);
+    }
+
+    console.log(`Wallet unit check passed. Account has sufficient units (required: ${SCRIPT_GENERATION_COST}).`);
+
+    // Generate script with OpenAI
     if (!apiKey) throw new Error('OpenAI API key missing');
     const openai = new OpenAI({ apiKey });
     const prompt = buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone });
+
+    console.log("Calling OpenAI API to generate script...");
 
     const response = await openai.chat.completions.create({
         model: 'gpt-4',
@@ -604,10 +714,16 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
     });
 
     const raw = response?.choices?.[0]?.message?.content?.trim() || '';
+    
+    if (!raw) {
+        throw new Error('OpenAI returned an empty response');
+    }
+
+    let scriptResult;
     try {
         const parsed = JSON.parse(raw);
-        if (!parsed.script) throw new Error('Invalid response');
-        return {
+        if (!parsed.script) throw new Error('Invalid response from OpenAI - missing script field');
+        scriptResult = {
             script: parsed.script.trim(),
             talkingPoints: Array.isArray(parsed.talkingPoints) ? parsed.talkingPoints : [],
             title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : (campaignTitle || 'AI Video'),
@@ -617,7 +733,8 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
             tokensUsed: response?.usage?.total_tokens || null
         };
     } catch (err) {
-        return {
+        console.log("OpenAI response was not JSON, using raw text as script");
+        scriptResult = {
             script: raw,
             talkingPoints: [],
             title: campaignTitle || 'AI Video',
@@ -625,7 +742,32 @@ async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescript
             tokensUsed: response?.usage?.total_tokens || null
         };
     }
+
+    console.log(`Script generated successfully, now deducting ${SCRIPT_GENERATION_COST} wallet units...`);
+
+    // Deduct units from wallet after successful script generation
+    const updateQuery = `
+        UPDATE Accounts
+        SET WalletUnits = WalletUnits - @cost
+        WHERE Id = @accountId;
+    `;
+
+    await pool.request()
+        .input('accountId', sql.Int, parseInt(accountId, 10))
+        .input('cost', sql.Int, SCRIPT_GENERATION_COST)
+        .query(updateQuery);
+
+    const newBalance = account.WalletUnits - SCRIPT_GENERATION_COST;
+    console.log(`Successfully deducted ${SCRIPT_GENERATION_COST} units from account:`, accountId);
+    console.log("New wallet balance:", newBalance);
+
+    // Add the deduction info to the result for the client
+    scriptResult.walletUnitsDeducted = SCRIPT_GENERATION_COST;
+    scriptResult.remainingWalletUnits = newBalance;
+
+    return scriptResult;
 }
+
 
 async function synthesizeVoiceOver({ script, voice, tone, apiKey }) {
     if (!apiKey) throw new Error('OpenAI API key missing for TTS');
@@ -753,11 +895,27 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
         campaignDescription,
         scriptContext,
         voice = 'Ava',
-        tone = 'Friendly'
+        tone = 'Friendly',
+        accountId  // Add accountId from request body
     } = req.body;
 
+    // Validate required fields
     if (!campaignDescription && !scriptContext) {
         return res.status(400).json({ error: 'Provide campaignDescription or scriptContext' });
+    }
+
+    if (!accountId) {
+        return res.status(400).json({ error: 'accountId is required' });
+    }
+
+    // Get the database pool from app.locals
+    const pool = req.app.locals.db;
+    
+    if (!pool) {
+        return res.status(500).json({ 
+            error: 'Database connection not available.',
+            details: 'Database pool not found in app.locals'
+        });
     }
 
     try {
@@ -767,7 +925,9 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
             campaignDescription,
             scriptContext,
             voice,
-            tone
+            tone,
+            accountId,      // Pass accountId
+            pool: pool      // Pass pool
         });
 
         res.json({
@@ -785,11 +945,26 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
     }
 });
 
+
 router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
-    let { script, voice = 'Ava', tone = 'Friendly', media, backgroundMusic } = req.body;
+    let { script, voice = 'Ava', tone = 'Friendly', media, backgroundMusic, accountId } = req.body;
 
     if (!script || typeof script !== 'string') {
         return res.status(400).json({ error: 'Script text is required' });
+    }
+
+    if (!accountId) {
+        return res.status(400).json({ error: 'accountId is required' });
+    }
+
+    // Get the database pool from app.locals
+    const pool = req.app.locals.db;
+    
+    if (!pool) {
+        return res.status(500).json({ 
+            error: 'Database connection not available.',
+            details: 'Database pool not found in app.locals'
+        });
     }
 
     if (typeof media === 'string') {
@@ -811,6 +986,44 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
     let finalVideoPath = null;
 
     try {
+        // ===== CHECK WALLET UNITS BEFORE PROCESSING =====
+        const walletQuery = `
+            SELECT
+                a.Id,
+                a.WalletUnits
+            FROM
+                Accounts AS a
+            WHERE
+                a.Id = @accountId;
+        `;
+
+        console.log("Checking wallet units for accountId:", accountId);
+
+        const result = await pool.request()
+            .input('accountId', sql.Int, parseInt(accountId, 10))
+            .query(walletQuery);
+
+        if (result.recordset.length === 0) {
+            return res.status(404).json({ error: 'Account not found.' });
+        }
+
+        const account = result.recordset[0];
+        console.log("Account found:", account.Id);
+        console.log("Wallet units:", account.WalletUnits);
+
+        // Check if wallet has sufficient units
+        if (account.WalletUnits < VIDEO_GENERATION_COST) {
+            return res.status(400).json({
+                error: 'Insufficient wallet units.',
+                message: `You have ${account.WalletUnits} units but need ${VIDEO_GENERATION_COST} units to generate a video.`,
+                currentWalletUnits: account.WalletUnits,
+                requiredUnits: VIDEO_GENERATION_COST
+            });
+        }
+
+        console.log(`Wallet unit check passed. Account has sufficient units (required: ${VIDEO_GENERATION_COST}).`);
+        // ===== END WALLET CHECK =====
+
         audioPath = await synthesizeVoiceOver({
             script,
             voice,
@@ -870,6 +1083,25 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
             duration: totalDuration
         });
 
+        // ===== DEDUCT WALLET UNITS AFTER SUCCESSFUL VIDEO GENERATION =====
+        console.log(`Video generated successfully, now deducting ${VIDEO_GENERATION_COST} wallet units...`);
+
+        const updateQuery = `
+            UPDATE Accounts
+            SET WalletUnits = WalletUnits - @cost
+            WHERE Id = @accountId;
+        `;
+
+        await pool.request()
+            .input('accountId', sql.Int, parseInt(accountId, 10))
+            .input('cost', sql.Int, VIDEO_GENERATION_COST)
+            .query(updateQuery);
+
+        const newBalance = account.WalletUnits - VIDEO_GENERATION_COST;
+        console.log(`Successfully deducted ${VIDEO_GENERATION_COST} units from account:`, accountId);
+        console.log("New wallet balance:", newBalance);
+        // ===== END WALLET DEDUCTION =====
+
         res.json({
             jobId: job.id,
             videoUrl: s3VideoUrl,
@@ -879,7 +1111,9 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
             tone,
             script,
             duration: totalDuration,
-            backgroundMusic: backgroundMusic || 'random'
+            backgroundMusic: backgroundMusic || 'random',
+            walletUnitsDeducted: VIDEO_GENERATION_COST,
+            remainingWalletUnits: newBalance
         });
     } catch (err) {
         console.error('AI video generation error:', err);
