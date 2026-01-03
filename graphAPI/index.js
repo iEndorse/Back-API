@@ -19,7 +19,7 @@ const engagementRoutes = require('./routes/engagement');
 const imageTextRoutes = require('./routes/imagetext');
 const ocrRoutes = require('./routes/ocrRoutes');
 const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js');
-const aiVideoRoute = require('./routes/AiVideo.js');
+const aiVideoRoute = require('./routes/AiVideo_with_auto_stock.js');
 
 // CORS Configuration
 const allowedOrigins = [
@@ -79,18 +79,27 @@ async function getAccessToken() {
     WithDecryption: true,
   };
 
+  // ✅ NEW: PEXELS API KEY
+  const param5 = {
+    Name: '/iEndorse/Production/PEXELS_API_KEY',
+    WithDecryption: true,
+  };
+
   try {
     const data1 = await ssm.getParameter(param1).promise();
     const data2 = await ssm.getParameter(param2).promise();
     const data3 = await ssm.getParameter(param3).promise();
     const data4 = await ssm.getParameter(param4).promise();
+    const data5 = await ssm.getParameter(param5).promise();
+
     console.log("Successfully retrieved from Parameter Store");
-    
+
     return {
       accessToken: data1.Parameter.Value,
       secretAccessKey: data2.Parameter.Value,
       sqlpassword: data3.Parameter.Value,
-      openai_api_key: data4.Parameter.Value
+      openai_api_key: data4.Parameter.Value,
+      pexels_api_key: data5.Parameter.Value, // ✅ NEW
     };
   } catch (err) {
     console.error('Error retrieving access token from SSM:', err);
@@ -103,6 +112,7 @@ let accessToken = null;
 let secretAccessKey = null;
 let sqlpassword = null;
 let openai_api_key = null;
+let pexels_api_key = null; // ✅ NEW
 let tokenInitialized = false;
 
 // Initialize and Refresh the token
@@ -110,15 +120,16 @@ async function initializeAccessToken() {
   console.log('Starting token initialization...');
   console.log('AWS_EXECUTION_ENV:', process.env.AWS_EXECUTION_ENV);
   console.log('AWS Region:', AWS.config.region);
-  
+
   try {
     const credentials = await getAccessToken();
     accessToken = credentials.accessToken;
     secretAccessKey = credentials.secretAccessKey;
     sqlpassword = credentials.sqlpassword;
     openai_api_key = credentials.openai_api_key;
+    pexels_api_key = credentials.pexels_api_key; // ✅ NEW
     tokenInitialized = true;
-    
+
     console.log('All credentials retrieved successfully');
   } catch (error) {
     console.error('Failed to retrieve credentials during initialization:', error);
@@ -149,6 +160,7 @@ setInterval(async () => {
     secretAccessKey = credentials.secretAccessKey;
     sqlpassword = credentials.sqlpassword;
     openai_api_key = credentials.openai_api_key;
+    pexels_api_key = credentials.pexels_api_key; // ✅ NEW
     console.log('Credentials Refreshed');
   } catch (error) {
     console.error('Failed to refresh credentials:', error);
@@ -157,12 +169,13 @@ setInterval(async () => {
 
 // HEALTH CHECK ROUTE
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy', 
+  res.status(200).json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     port: port,
-    accessTokenLoaded: !!accessToken
+    accessTokenLoaded: !!accessToken,
+    pexelsKeyLoaded: !!pexels_api_key,
   });
 });
 
@@ -180,6 +193,7 @@ app.use((req, res, next) => {
   }
   req.accessToken = accessToken;
   req.openai_api_key = openai_api_key;
+  req.pexels_api_key = pexels_api_key; // ✅ NEW
   next();
 });
 
@@ -202,21 +216,21 @@ async function connectToDatabase() {
   if (!tokenInitialized) {
     await initPromise;
   }
-  
+
   const config = getDbConfig();
   console.log('Attempting database connection to:', config.server);
-  
+
   const pool = new sql.ConnectionPool(config);
-  
+
   try {
     await pool.connect();
     console.log('Connected to SQL Server database');
-    
+
     // Add connection error handler
     pool.on('error', err => {
       console.error('Database pool error:', err);
     });
-    
+
     return pool;
   } catch (err) {
     console.error('Database connection failed:', err);
@@ -247,19 +261,19 @@ app.use(async (req, res, next) => {
           console.log('Error closing existing pool:', closeErr.message);
         }
       }
-      
+
       // Create new connection
       app.locals.db = await connectToDatabase();
       console.log('Database reconnected successfully');
     } catch (error) {
       console.error('Failed to reconnect to database:', error);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'Database connection failed',
-        details: error.message 
+        details: error.message
       });
     }
   }
-  
+
   next();
 });
 // ===== END DATABASE RECONNECTION MIDDLEWARE =====
@@ -287,7 +301,7 @@ connectToDatabase()
     // Make the pool available to routes
     app.locals.db = pool;
     console.log('Database pool set in app.locals');
-    
+
     // Only start server if not in Lambda
     if (process.env.AWS_EXECUTION_ENV === undefined) {
       app.listen(port, () => {

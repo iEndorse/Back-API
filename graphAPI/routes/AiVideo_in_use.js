@@ -9,1222 +9,1123 @@ const { OpenAI } = require('openai');
 const AWS = require('aws-sdk');
 const sql = require('mssql');
 
-// Resolve ffmpeg binary dynamically (env -> ffmpeg-static -> PATH)
-let resolvedFfmpeg = process.env.FFMPEG_PATH;
-if (!resolvedFfmpeg) {
-    try { resolvedFfmpeg = require('ffmpeg-static'); } catch (_) { /* optional */ }
-}
-if (!resolvedFfmpeg || (path.isAbsolute(resolvedFfmpeg) && !fs.existsSync(resolvedFfmpeg))) {
-    resolvedFfmpeg = 'ffmpeg';
-}
-ffmpeg.setFfmpegPath(resolvedFfmpeg);
-
-// Resolve ffprobe path so duration checks work even when using ffmpeg-static
-let resolvedFfprobe = process.env.FFPROBE_PATH;
-if (!resolvedFfprobe) {
-    try { resolvedFfprobe = require('ffprobe-static')?.path; } catch (_) { /* optional */ }
-}
-if (!resolvedFfprobe || (path.isAbsolute(resolvedFfprobe) && !fs.existsSync(resolvedFfprobe))) {
-    resolvedFfprobe = 'ffprobe';
-}
-ffmpeg.setFfprobePath(resolvedFfprobe);
-
 const router = express.Router();
 router.use(express.json());
 router.use(express.urlencoded({ extended: true }));
+const upload = multer();
 
-// Use /tmp in Lambda, local temp directory otherwise
+/* ============================
+   FFmpeg path resolution
+============================ */
+let resolvedFfmpeg = process.env.FFMPEG_PATH;
+if (!resolvedFfmpeg) {
+  try { resolvedFfmpeg = require('ffmpeg-static'); } catch (_) {}
+}
+if (!resolvedFfmpeg || (path.isAbsolute(resolvedFfmpeg) && !fs.existsSync(resolvedFfmpeg))) {
+  resolvedFfmpeg = 'ffmpeg';
+}
+ffmpeg.setFfmpegPath(resolvedFfmpeg);
+
+let resolvedFfprobe = process.env.FFPROBE_PATH;
+if (!resolvedFfprobe) {
+  try { resolvedFfprobe = require('ffprobe-static')?.path; } catch (_) {}
+}
+if (!resolvedFfprobe || (path.isAbsolute(resolvedFfprobe) && !fs.existsSync(resolvedFfprobe))) {
+  resolvedFfprobe = 'ffprobe';
+}
+ffmpeg.setFfprobePath(resolvedFfprobe);
+
+/* ============================
+   TEMP
+============================ */
 const TEMP_DIR = process.env.AWS_EXECUTION_ENV ? '/tmp' : path.join(__dirname, '..', 'temp');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour
+/* ============================
+   S3 setup
+   ✅ Output stays in iendorse-audio-assets (old pipeline)
+============================ */
+const AUDIO_BUCKET = process.env.AUDIO_BUCKET || 'iendorse-audio-assets';
+const S3_AUDIO_PREFIX = process.env.S3_AUDIO_PREFIX || 'background-music/';
+
+// KEEP OLD OUTPUT LOCATION
+const OUTPUT_BUCKET = process.env.OUTPUT_BUCKET || AUDIO_BUCKET;
+const S3_VIDEO_PREFIX = process.env.S3_VIDEO_PREFIX || 'ai-generated-videos/';
+
+// Stock library bucket/prefix (moving background videos)
+const STOCK_BUCKET = process.env.STOCK_BUCKET || 'iendore-stock-assets';
+const STOCK_BASE_PREFIX = (process.env.STOCK_BASE_PREFIX || 'stock').replace(/\/+$/, '');
+
+const s3 = new AWS.S3();
+
+/* ============================
+   Costs
+============================ */
+const SCRIPT_GENERATION_COST = parseInt(process.env.SCRIPT_GENERATION_COST || '2', 10);
+const VIDEO_GENERATION_COST = parseInt(process.env.VIDEO_GENERATION_COST || '5', 10);
+
+/* ============================
+   Jobs
+============================ */
+const JOB_TTL_MS = 60 * 60 * 1000;
 const videoJobs = new Map();
-const upload = multer();
 
-// S3 Configuration
-const S3_BUCKET = 'iendorse-audio-assets';
-const S3_AUDIO_PREFIX = 'background-music/';
-const S3_VIDEO_PREFIX = 'ai-generated-videos/';
-
-// Map UI voice labels to OpenAI TTS voices
-const OPENAI_TTS_VOICE_MAP = {
-    Ava: 'alloy',
-    Noah: 'verse',
-    Sofia: 'shimmer',
-    Mason: 'onyx'
-};
-
-
-
-
-
-// Route to generate voice sample
-// router.post('/ai-video/voice-sample', async (req, res) => {
-//     const { voice = 'alloy' } = req.body;
-
-//     // OpenAI TTS available voices: alloy, echo, fable, onyx, nova, shimmer
-//     const voiceMap = {
-//     Ava: 'alloy',
-//     Noah: 'echo',
-//     Sofia: 'shimmer',
-//     Mason: 'onyx'
-//     };
-
-//    // const openaiVoice = voiceMap[voice] || voiceMap['default'];
-   
-//     const openaiVoice = voiceMap[voice] || voiceMap.Ava || 'alloy';
-
-
-
-//     try {
-//         const openai = new OpenAI({
-//             apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
-//         });
-
-//         console.log(`Generating voice sample for ${voice} (${openaiVoice})`);
-
-//         // Generate speech
-//         const mp3 = await openai.audio.speech.create({
-//             model: "tts-1", // or "tts-1-hd" for higher quality
-//             voice: openaiVoice,
-//             input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
-//         });
-
-//         // Convert to buffer
-//         const buffer = Buffer.from(await mp3.arrayBuffer());
-
-//         // Set response headers for audio
-//         res.set({
-//             'Content-Type': 'audio/mpeg',
-//             'Content-Length': buffer.length,
-//             'Content-Disposition': `inline; filename="voice-sample-${voice}.mp3"`
-//         });
-
-//         // Send the audio buffer
-//         res.send(buffer);
-
-//     } catch (error) {
-//         console.error('Error generating voice sample:', error);
-//         res.status(500).json({ 
-//             error: 'Failed to generate voice sample',
-//             details: error.message 
-//         });
-//     }
-// });
-
-
-
-
-router.post('/ai-video/voice-sample', async (req, res) => {
-  const { voice = 'alloy' } = req.body;
-
-  // UI labels -> OpenAI voice ids
-  const voiceMap = {
-    Ava: 'alloy',
-    Noah: 'echo',
-    Sofia: 'shimmer',
-    Mason: 'onyx',
-  };
-
-  const allowedVoices = new Set(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']);
-  const openaiVoice = allowedVoices.has(voice) ? voice : (voiceMap[voice] || 'alloy');
-
-  try {
-    const openai = new OpenAI({
-      apiKey: req.openai_api_key || process.env.OPENAI_API_KEY,
-    });
-
-    console.log(`Generating voice sample for "${voice}" -> "${openaiVoice}"`);
-
-    const mp3 = await openai.audio.speech.create({
-      model: 'tts-1',
-      voice: openaiVoice,
-      input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
-    });
-
-    const buffer = Buffer.from(await mp3.arrayBuffer());
-
-  res.set({
-  "Content-Type": "audio/mpeg",
-  "Content-Disposition": `inline; filename="voice-sample-${openaiVoice}.mp3"`,
-  "Cache-Control": "no-store",
-});
-
-return res.status(200).end(buffer);
-
-
-  } catch (error) {
-    console.error('Error generating voice sample:', error);
-    return res.status(500).json({
-      error: 'Failed to generate voice sample',
-      details: error?.message || String(error),
-    });
-  }
-});
-
-
-function safeUnlink(filePath) {
-    if (filePath && fs.existsSync(filePath)) {
-        try {
-            fs.unlinkSync(filePath);
-        } catch (err) {
-            console.error('Error deleting file:', filePath, err);
-        }
-    }
-}
-
+function safeUnlink(p) { try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {} }
 function cleanupJob(jobId) {
-    const job = videoJobs.get(jobId);
-    if (!job) return;
-    // Only cleanup local files, not S3 URLs
-    if (job.path && !job.path.startsWith('http')) {
-        safeUnlink(job.path);
-    }
-    safeUnlink(job.audioPath);
-    videoJobs.delete(jobId);
+  const job = videoJobs.get(jobId);
+  if (!job) return;
+  videoJobs.delete(jobId);
 }
-
 function getActiveJob(jobId) {
-    const job = videoJobs.get(jobId);
-    if (!job) return null;
-    if (Date.now() > job.expiresAt) {
-        cleanupJob(jobId);
-        return null;
-    }
-    return job;
+  const job = videoJobs.get(jobId);
+  if (!job) return null;
+  if (Date.now() > job.expiresAt) {
+    cleanupJob(jobId);
+    return null;
+  }
+  return job;
+}
+function registerJob({ filePath, script, voice, tone, duration }) {
+  const jobId = uuidv4();
+  const record = {
+    id: jobId,
+    path: filePath,
+    script,
+    voice,
+    tone,
+    duration,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + JOB_TTL_MS,
+    filename: path.basename(filePath)
+  };
+  videoJobs.set(jobId, record);
+  const timeout = setTimeout(() => cleanupJob(jobId), JOB_TTL_MS);
+  if (typeof timeout.unref === 'function') timeout.unref();
+  return record;
 }
 
-// Clean up any orphaned temp files on startup
-function cleanupOrphanedTempFiles() {
-    try {
-        if (!fs.existsSync(TEMP_DIR)) return;
-        
-        const files = fs.readdirSync(TEMP_DIR);
-        const oneHourAgo = Date.now() - JOB_TTL_MS;
-        
-        files.forEach(file => {
-            const filePath = path.join(TEMP_DIR, file);
-            try {
-                const stats = fs.statSync(filePath);
-                
-                // Delete files older than 1 hour
-                if (stats.mtimeMs < oneHourAgo) {
-                    console.log('Cleaning up orphaned file:', file);
-                    safeUnlink(filePath);
-                }
-            } catch (err) {
-                console.error(`Error checking file ${file}:`, err);
-            }
-        });
-        
-        console.log('Temp directory cleanup complete');
-    } catch (err) {
-        console.error('Error cleaning up temp files:', err);
-    }
+/* ============================
+   Helpers
+============================ */
+function safeJsonParse(s) { try { return JSON.parse(s); } catch { return null; } }
+function isUrl(p) { return typeof p === 'string' && /^https?:\/\//i.test(p); }
+
+function isVideoPath(p) { return /\.(mp4|mov|mkv|avi|webm)$/i.test(String(p || '')); }
+function isImagePath(p) { return /\.(jpg|jpeg|png|webp)$/i.test(String(p || '')); }
+
+function normalizeCategory(cat) {
+  const c = String(cat || 'business')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '');
+  return c || 'business';
 }
 
-// Run cleanup on module load
-cleanupOrphanedTempFiles();
 
-function inferMimeType(filePath) {
-    const ext = path.extname(filePath || '').toLowerCase();
-    switch (ext) {
-        case '.mp4':
-            return 'video/mp4';
-        case '.mov':
-            return 'video/quicktime';
-        case '.avi':
-            return 'video/x-msvideo';
-        case '.mkv':
-            return 'video/x-matroska';
-        default:
-            return 'application/octet-stream';
-    }
+function normalizeIntent(intent) {
+  const i = String(intent || '').toLowerCase();
+  if (i.includes('hook') || i.includes('attention')) return 'hook';
+  if (i.includes('problem') || i.includes('pain')) return 'problem';
+  if (i.includes('solution') || i.includes('product')) return 'solution';
+  if (i.includes('cta') || i.includes('action')) return 'cta';
+  return 'general';
 }
 
-async function downloadFileIfNeeded(filePath) {
-    if (!filePath) throw new Error('Media filePath is required');
-    const filename = `${uuidv4()}_${path.basename(filePath).replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
-    const tempPath = path.join(TEMP_DIR, filename);
-
-    if (filePath.startsWith('http')) {
-        const response = await axios({
-            method: 'get',
-            url: filePath,
-            responseType: 'stream'
-        });
-        await new Promise((resolve, reject) => {
-            const writer = fs.createWriteStream(tempPath);
-            response.data.pipe(writer);
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
-    } else {
-        if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
-        fs.copyFileSync(filePath, tempPath);
-    }
-    return tempPath;
+function enforceIntents(segments) {
+  const fallback = ['hook', 'problem', 'solution', 'cta'];
+  return (segments || [])
+    .map((s, idx) => ({
+      ...s,
+      intent: normalizeIntent(s?.intent || fallback[idx] || 'general'),
+      id: String(s?.id || s?.intent || `seg${idx + 1}`),
+      text: String(s?.text || '').trim(),
+      onScreenText: String(s?.onScreenText || '').trim(),
+    }))
+    .filter(s => s.text.length > 0);
 }
 
 function getMediaDuration(mediaPath) {
-    return new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(mediaPath, (err, metadata) => {
-            if (err) return reject(err);
-            resolve(parseFloat(metadata?.format?.duration) || 0);
-        });
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(mediaPath, (err, metadata) => {
+      if (err) return reject(err);
+      resolve(parseFloat(metadata?.format?.duration) || 0);
     });
+  });
 }
 
-async function createVideoWithTransitions(
-  imagePaths,
-  outputVideoPath,
-  totalDuration,
-  audioPath,
-  backgroundMusicPath = null
-) {
-  if (!imagePaths.length) throw new Error('No media frames provided');
+async function downloadFileIfNeeded(filePath) {
+  if (!filePath) throw new Error('Media filePath is required');
+  const ext = path.extname(filePath).toLowerCase() || '.bin';
+  const out = path.join(TEMP_DIR, `${uuidv4()}${ext}`);
 
-  safeUnlink(outputVideoPath);
-
-  const outputDir = path.dirname(outputVideoPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-
-  const hasAudio = audioPath && fs.existsSync(audioPath);
-  const hasBackgroundMusic =
-    backgroundMusicPath && fs.existsSync(backgroundMusicPath);
-
-  // MAXIMUM 10 seconds per clip
-  const MAX_CLIP_DURATION = 10;
-  const durPerMedia = Math.min(
-    MAX_CLIP_DURATION,
-    totalDuration / imagePaths.length
-  );
-
-  // Duration of one full pass of all media (1..N)
-  const singlePassDuration = durPerMedia * imagePaths.length;
-
-  // How many times we need to repeat the sequence to fill the audio
-  const loopsNeeded = Math.max(
-    1,
-    Math.ceil(totalDuration / singlePassDuration)
-  );
-
-  console.log(
-    `Creating video: ${imagePaths.length} media items, ` +
-      `${durPerMedia.toFixed(2)}s each, ${loopsNeeded} loop(s), total: ${totalDuration}s`
-  );
-
-  // ---------- SINGLE MEDIA CASE ----------
-  if (imagePaths.length === 1) {
-    const mediaPath = imagePaths[0];
-    const ext = path.extname(mediaPath).toLowerCase();
-    const isImageExt = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].includes(ext);
-
-    const cmd = ffmpeg();
-    cmd.input(mediaPath);
-
-    let isVideo = false;
-    let videoDuration = 0;
-
-    if (!isImageExt) {
-      try {
-        const metadata = await new Promise((resolve, reject) => {
-          ffmpeg.ffprobe(mediaPath, (err, data) => {
-            if (err) reject(err);
-            else resolve(data);
-          });
-        });
-
-        const videoStream = metadata.streams?.find(
-          (s) => s.codec_type === 'video'
-        );
-        videoDuration = parseFloat(metadata.format?.duration || 0) || 0;
-        isVideo = !!(videoStream && videoDuration > 0);
-      } catch (err) {
-        isVideo = false;
-        videoDuration = 0;
-      }
-    }
-
-    if (!isVideo) {
-      // Image (or unknown) – treat as still, loop for full duration
-      cmd.inputOptions(['-loop', '1', '-t', totalDuration.toString()]);
-    } else {
-      // Real video
-      if (videoDuration < totalDuration - 0.1) {
-        let loops = Math.ceil(totalDuration / videoDuration);
-        const MAX_VIDEO_LOOPS = 10;
-        if (loops > MAX_VIDEO_LOOPS) loops = MAX_VIDEO_LOOPS;
-        console.log(
-          `Single media: looping video ${loops} times to fill ~${totalDuration}s`
-        );
-        cmd.inputOptions(['-stream_loop', (loops - 1).toString()]);
-      } else {
-        console.log(
-          `Single media: trimming video from ${videoDuration}s to ${totalDuration}s`
-        );
-      }
-    }
-
-    if (hasAudio) cmd.input(audioPath);
-    if (hasBackgroundMusic) cmd.input(backgroundMusicPath);
-
-    const outputOpts = [
-      '-vf',
-      [
-        'scale=1080:1920:force_original_aspect_ratio=decrease',
-        'pad=1080:1920:(1080-iw)/2:(1920-ih)/2',
-        'setsar=1',
-        'format=yuv420p',
-        'fps=30',
-      ].join(','),
-      '-t',
-      totalDuration.toString(),
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-crf',
-      '30',
-      '-pix_fmt',
-      'yuv420p',
-      '-movflags',
-      '+faststart',
-      '-threads',
-      '0',
-    ];
-
-    if (hasAudio && hasBackgroundMusic) {
-      // video = input 0, voice = 1:a, bg = 2:a
-      const audioFilter =
-        '[1:a]volume=1.0[voice];' +
-        '[2:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];' +
-        '[voice][bg]amix=inputs=2:duration=shortest[aout]';
-      outputOpts.push(
-        '-filter_complex',
-        audioFilter,
-        '-map',
-        '0:v',
-        '-map',
-        '[aout]',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k'
-      );
-    } else if (hasAudio) {
-      outputOpts.push(
-        '-map',
-        '0:v',
-        '-map',
-        '1:a',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '96k',
-        '-shortest'
-      );
-    } else {
-      outputOpts.push('-an');
-    }
-
-    return new Promise((resolve, reject) => {
-      cmd
-        .outputOptions(outputOpts)
-        .output(outputVideoPath)
-        .on('start', () => console.log('Processing single media...'))
-        .on('end', () => {
-          console.log('Video created!');
-          resolve();
-        })
-        .on('error', (err, stdout, stderr) => {
-          console.error('FFmpeg error:', stderr);
-          reject(err);
-        })
-        .run();
+  if (isUrl(filePath)) {
+    const response = await axios({ method: 'get', url: filePath, responseType: 'stream', timeout: 45000 });
+    await new Promise((resolve, reject) => {
+      const w = fs.createWriteStream(out);
+      response.data.pipe(w);
+      w.on('finish', resolve);
+      w.on('error', reject);
     });
+    return out;
   }
 
-  // ---------- MULTIPLE MEDIA CASE ----------
-  const transitionDuration = 2.5;
-  const processedClips = [];
+  if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+  fs.copyFileSync(filePath, out);
+  return out;
+}
+
+/* ============================
+   DB pool
+============================ */
+function getDbPoolFromReq(req) {
+  const pool = req?.app?.locals?.db;
+  if (!pool || !pool.connected) throw new Error('Database pool not available');
+  return pool;
+}
+
+async function deductWalletUnitsAtomic({ pool, accountId, cost }) {
+  const q = `
+    UPDATE Accounts
+    SET WalletUnits = WalletUnits - @cost
+    WHERE Id = @accountId AND WalletUnits >= @cost;
+
+    SELECT @@ROWCOUNT AS rowsAffected;
+
+    SELECT Id, WalletUnits
+    FROM Accounts
+    WHERE Id = @accountId;
+  `;
+
+  const r = await pool.request()
+    .input('accountId', sql.Int, parseInt(accountId, 10))
+    .input('cost', sql.Int, cost)
+    .query(q);
+
+  const rowsAffected = r.recordsets?.[0]?.[0]?.rowsAffected || 0;
+  const account = r.recordsets?.[1]?.[0];
+
+  if (!account) throw new Error('Account not found.');
+  if (rowsAffected === 0) throw new Error(`Insufficient wallet units. You have ${account.WalletUnits} but need ${cost}.`);
+  return { remainingWalletUnits: account.WalletUnits };
+}
+
+/* ============================
+   Voice mapping
+============================ */
+const ALLOWED_TTS_VOICES = new Set(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']);
+const OPENAI_TTS_VOICE_MAP = { Ava: 'alloy', Noah: 'echo', Sofia: 'shimmer', Mason: 'onyx' };
+
+function resolveTtsVoice(voiceLabelOrId) {
+  if (ALLOWED_TTS_VOICES.has(voiceLabelOrId)) return voiceLabelOrId;
+  return OPENAI_TTS_VOICE_MAP[voiceLabelOrId] || 'alloy';
+}
+
+/* ============================
+   ✅ Tone -> TTS instructions (NOT spoken)
+============================ */
+function toneToInstructions(tone) {
+  const t = String(tone || '').toLowerCase().trim();
+  switch (t) {
+    case 'friendly':
+      return 'Warm, friendly, and welcoming. Natural pace.';
+    case 'excited':
+      return 'Upbeat, energetic, enthusiastic. Slightly faster pace.';
+    case 'urgent':
+      return 'Urgent, persuasive, faster pace, strong emphasis.';
+    case 'professional':
+      return 'Clear, confident, professional. Calm and steady.';
+    default:
+      return '';
+  }
+}
+
+/* ============================
+   Background music
+============================ */
+async function downloadBackgroundMusicFromS3(backgroundMusic) {
+  if (backgroundMusic) {
+    const key = `${S3_AUDIO_PREFIX}${backgroundMusic}`;
+    const localPath = path.join(TEMP_DIR, `bg_${uuidv4()}.mp3`);
+    try {
+      const data = await s3.getObject({ Bucket: AUDIO_BUCKET, Key: key }).promise();
+      fs.writeFileSync(localPath, data.Body);
+      return localPath;
+    } catch (_) {
+      return null;
+    }
+  }
 
   try {
-    // 1) Turn each media into a clip of exactly durPerMedia seconds
-    for (let i = 0; i < imagePaths.length; i++) {
-      const mediaPath = imagePaths[i];
-      const clipPath = path.join(
-        TEMP_DIR,
-        `processed_${i}_${uuidv4()}.mp4`
-      );
+    const listParams = { Bucket: AUDIO_BUCKET, Prefix: S3_AUDIO_PREFIX, MaxKeys: 500 };
+    const s3Files = await s3.listObjectsV2(listParams).promise();
+    const audioFiles = (s3Files.Contents || [])
+      .map(obj => obj.Key)
+      .filter(key => key && key.toLowerCase().match(/\.(mp3|wav|m4a|aac)$/));
 
-      const ext = path.extname(mediaPath).toLowerCase();
-      const isImageExt = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].includes(
-        ext
-      );
+    if (!audioFiles.length) return null;
 
-      let isVideo = false;
-      let videoDuration = 0;
-
-      if (!isImageExt) {
-        try {
-          const metadata = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(mediaPath, (err, data) => {
-              if (err) reject(err);
-              else resolve(data);
-            });
-          });
-
-          const videoStream = metadata.streams?.find(
-            (s) => s.codec_type === 'video'
-          );
-          videoDuration = parseFloat(metadata.format?.duration || 0) || 0;
-          isVideo = !!(videoStream && videoDuration > 0);
-        } catch (err) {
-          isVideo = false;
-          videoDuration = 0;
-        }
-      }
-
-      console.log(
-        `Processing media ${i + 1}/${imagePaths.length} ` +
-          `(${isVideo ? 'video' : 'image'}, target: ${durPerMedia}s)`
-      );
-
-      await new Promise((resolve, reject) => {
-        const cmd = ffmpeg();
-        cmd.input(mediaPath);
-
-        if (!isVideo) {
-          // Image (or unknown) – treat as still
-          cmd.inputOptions(['-loop', '1', '-t', durPerMedia.toString()]);
-        } else {
-          // Real video: loop or trim to reach durPerMedia
-          if (videoDuration < durPerMedia - 0.1) {
-            let loops = Math.ceil(durPerMedia / videoDuration);
-            const MAX_VIDEO_LOOPS = 10;
-            if (loops > MAX_VIDEO_LOOPS) loops = MAX_VIDEO_LOOPS;
-            console.log(
-              `  Looping video ${loops} times to fill ~${durPerMedia}s`
-            );
-            cmd.inputOptions(['-stream_loop', (loops - 1).toString()]);
-          } else {
-            console.log(
-              `  Trimming video from ${videoDuration}s to ${durPerMedia}s`
-            );
-          }
-        }
-
-        cmd
-          .outputOptions([
-            '-vf',
-            [
-              'scale=1080:1920:force_original_aspect_ratio=decrease',
-              'pad=1080:1920:(1080-iw)/2:(1920-ih)/2',
-              'setsar=1',
-              'format=yuv420p',
-              'fps=30',
-            ].join(','),
-            '-t',
-            durPerMedia.toString(), // force exact duration
-            '-c:v',
-            'libx264',
-            '-preset',
-            'ultrafast',
-            '-crf',
-            '30',
-            '-pix_fmt',
-            'yuv420p',
-            '-an', // drop any source audio
-          ])
-          .output(clipPath)
-          .on('end', () => {
-            processedClips.push(clipPath);
-            resolve();
-          })
-          .on('error', (err, stdout, stderr) => {
-            console.error(`Error processing media ${i}:`, stderr);
-            reject(err);
-          })
-          .run();
-      });
-    }
-
-    console.log(
-      `All media processed. Creating ${loopsNeeded} loop(s) with transitions...`
-    );
-
-    // 2) Build the final sequence with loopsNeeded passes of all clips
-    const cmd = ffmpeg();
-
-    for (let loop = 0; loop < loopsNeeded; loop++) {
-      processedClips.forEach((clip) => cmd.input(clip));
-    }
-
-    if (hasAudio) cmd.input(audioPath);
-    if (hasBackgroundMusic) cmd.input(backgroundMusicPath);
-
-    // total video inputs = processedClips.length * loopsNeeded
-    const totalClips = processedClips.length * loopsNeeded;
-
-    const filterParts = [];
-
-    // label each video input
-    for (let i = 0; i < totalClips; i++) {
-      filterParts.push(`[${i}:v]null[v${i}]`);
-    }
-
-    // xfade chain
-    let prev = 'v0';
-    let offset = durPerMedia - transitionDuration;
-
-    for (let i = 1; i < totalClips; i++) {
-      const cur = `v${i}`;
-      const out = i === totalClips - 1 ? 'vout' : `vx${i}`;
-      filterParts.push(
-        `[${prev}][${cur}]xfade=transition=fade:` +
-          `duration=${transitionDuration}:offset=${offset.toFixed(2)}[${out}]`
-      );
-      prev = out;
-      offset += durPerMedia - transitionDuration;
-    }
-
-    const filterSegments = [filterParts.join(';')];
-
-    const outputOpts = [
-      '-map',
-      '[vout]',
-      '-t',
-      totalDuration.toString(), // match audio length
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-crf',
-      '30',
-      '-pix_fmt',
-      'yuv420p',
-      '-movflags',
-      '+faststart',
-      '-threads',
-      '0',
-    ];
-
-    if (hasAudio && hasBackgroundMusic) {
-      // voiceover = [totalClips]:a, background = [totalClips+1]:a
-      const audioFilter =
-        `[${totalClips}:a]volume=1.0[voice];` +
-        `[${totalClips + 1}:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];` +
-        `[voice][bg]amix=inputs=2:duration=shortest[aout]`;
-      filterSegments.push(audioFilter);
-      cmd.complexFilter(filterSegments.join(';'));
-      outputOpts.push(
-        '-map',
-        '[aout]',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k'
-      );
-    } else if (hasAudio) {
-      // no background music – just use voiceover stream directly
-      cmd.complexFilter(filterSegments.join(';'));
-      outputOpts.push(
-        '-map',
-        `${totalClips}:a`,
-        '-c:a',
-        'aac',
-        '-b:a',
-        '96k',
-        '-shortest'
-      );
-    } else {
-      // no audio at all
-      cmd.complexFilter(filterSegments.join(';'));
-    }
-
-    cmd.outputOptions(outputOpts).output(outputVideoPath);
-
-    await new Promise((resolve, reject) => {
-      cmd
-        .on('start', () =>
-          console.log('Creating final video with looped clips...')
-        )
-        .on('progress', (progress) => {
-          if (progress.percent) {
-            console.log('Progress: ' + Math.round(progress.percent) + '%');
-          }
-        })
-        .on('end', () => {
-          console.log('Video created!');
-          resolve();
-        })
-        .on('error', (err, stdout, stderr) => {
-          console.error('FFmpeg error:', stderr);
-          reject(err);
-        })
-        .run();
-    });
-
-    // cleanup
-    processedClips.forEach((clip) => safeUnlink(clip));
-  } catch (error) {
-    processedClips.forEach((clip) => clip && safeUnlink(clip));
-    throw error;
+    const randomKey = audioFiles[Math.floor(Math.random() * audioFiles.length)];
+    const localPath = path.join(TEMP_DIR, `bg_${uuidv4()}.mp3`);
+    const data = await s3.getObject({ Bucket: AUDIO_BUCKET, Key: randomKey }).promise();
+    fs.writeFileSync(localPath, data.Body);
+    return localPath;
+  } catch (_) {
+    return null;
   }
 }
 
-
-function buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone }) {
-    return `
-You are an AI video copywriter for IEndorse campaigns.
-Write a short but punchy video script that ALWAYS includes the company name inside the video title using the details below.
-Voice Talent: ${voice || 'Default'}
-Tone: ${tone || 'Friendly'}
-
-Return JSON ONLY in the following format:
-{
-  "title": "punchy 5-10 word video title",
-  "description": "1-2 sentence summary (max ~200 characters) of the story viewers will hear",
-  "script": "full script text",
-  "talkingPoints": ["bullet 1", "bullet 2"]
+/* ============================
+   Stock selection (VIDEO ONLY)
+============================ */
+function buildStockPrefixes({ category, intent }) {
+  const cat = normalizeCategory(category);
+  const it = normalizeIntent(intent);
+  const base = STOCK_BASE_PREFIX;
+  return [
+    `${base}/video/${cat}/${it}/`,
+    `${base}/video/${cat}/general/`,
+    `${base}/video/general/${it}/`,
+    `${base}/video/general/general/`,
+  ];
 }
 
-Campaign Title (MUST include company name): ${campaignTitle || 'Untitled Campaign'}
+const prefixCache = new Map();
+const PREFIX_CACHE_TTL_MS = 15 * 60 * 1000;
+
+async function listKeysCached(prefix) {
+  const now = Date.now();
+  const cached = prefixCache.get(prefix);
+  if (cached && now < cached.expiresAt) return cached.keys;
+
+  const r = await s3.listObjectsV2({
+    Bucket: STOCK_BUCKET,
+    Prefix: prefix,
+    MaxKeys: 500
+  }).promise();
+
+  const keys = (r.Contents || [])
+    .map(x => x.Key)
+    .filter(k => k && !k.endsWith('/'))
+    .filter(k => isVideoPath(k));
+
+  prefixCache.set(prefix, { keys, expiresAt: now + PREFIX_CACHE_TTL_MS });
+  return keys;
+}
+
+function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+async function downloadS3KeyToLocal(bucket, key) {
+  const out = path.join(TEMP_DIR, `s3_${uuidv4()}_${path.basename(key)}`);
+  const obj = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+  fs.writeFileSync(out, obj.Body);
+  return out;
+}
+
+async function pickStockVideoLocalPath({ category, intent }) {
+  const prefixes = buildStockPrefixes({ category, intent });
+  for (const prefix of prefixes) {
+    const keys = await listKeysCached(prefix);
+    if (keys.length) return await downloadS3KeyToLocal(STOCK_BUCKET, pickRandom(keys));
+  }
+  return null;
+}
+
+/* ============================
+   Segmented script generator
+============================ */
+function buildSegmentedScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone, category }) {
+  return `
+You are a campaign copywriter for small and medium business owners.
+
+Return JSON ONLY:
+{
+  "title": "5-10 word title INCLUDING the company name",
+  "description": "1-2 sentence summary (<= 200 chars)",
+  "segments": [
+    { "id": "hook", "intent": "hook", "text": "2-3 sentence"},
+    { "id": "problem", "intent": "problem", "text": "2-3 sentences"},
+    { "id": "solution", "intent": "solution", "text": "2-3 sentences"},
+    { "id": "cta", "intent": "cta", "text": "2-3 short sentence"}
+  ]
+}
+
+Tone: ${tone || 'friendly'}
+Voice Talent: ${voice || 'default'}
+Category: ${category || 'general'}
+
+Campaign Title: ${campaignTitle || 'Untitled Campaign'}
 Campaign Description: ${campaignDescription || 'N/A'}
 Additional Context: ${scriptContext || 'N/A'}
 `;
 }
 
-//////////
-// Define the cost
-const SCRIPT_GENERATION_COST = 20;
-const VIDEO_GENERATION_COST = 50;
+async function generateSegmentedScript({ apiKey, payload }) {
+  const openai = new OpenAI({ apiKey });
 
-async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescription, scriptContext, voice, tone, accountId, pool }) {
+  const r = await openai.chat.completions.create({
+    model: process.env.SCRIPT_MODEL || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: 'Return JSON only. No markdown. No commentary.' },
+      { role: 'user', content: buildSegmentedScriptPrompt(payload) },
+    ],
+    temperature: 0.7,
+  });
 
-    // Check for wallet unit availability
-    if (!pool) {
-        console.error("Database connection not available!");
-        throw new Error('Database connection not available.');
+  const content = r.choices?.[0]?.message?.content || '{}';
+  const json = safeJsonParse(content);
+  if (!json) throw new Error('Model did not return valid JSON for script.');
+
+  const segments = enforceIntents(json.segments);
+  if (!segments.length) throw new Error('No usable segments returned.');
+
+  return {
+    title: String(json.title || '').trim(),
+    description: String(json.description || '').trim(),
+    segments,
+  };
+}
+
+/* ============================
+   TTS per segment + concat
+============================ */
+async function synthesizeSegmentAudio({ apiKey, ttsVoice, segmentText, tone }) {
+  const openai = new OpenAI({ apiKey });
+  const audioPath = path.join(TEMP_DIR, `seg_${uuidv4()}.mp3`);
+
+  const response = await openai.audio.speech.create({
+    model: process.env.TTS_MODEL || 'gpt-4o-mini-tts',
+    voice: ttsVoice,
+    input: String(segmentText || '').trim(),
+    instructions: toneToInstructions(tone),
+    response_format: 'mp3',
+  });
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  fs.writeFileSync(audioPath, buffer);
+  return audioPath;
+}
+
+async function concatAudioMp3({ segmentAudioPaths, outPath }) {
+  const listPath = path.join(TEMP_DIR, `concat_${uuidv4()}.txt`);
+  fs.writeFileSync(listPath, segmentAudioPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'));
+
+  await new Promise((resolve, reject) => {
+    ffmpeg()
+      .input(listPath)
+      .inputOptions(['-f', 'concat', '-safe', '0'])
+      .outputOptions(['-c:a', 'mp3', '-q:a', '4'])
+      .output(outPath)
+      .on('end', resolve)
+      .on('error', (err, _stdout, stderr) => reject(new Error(stderr || err.message)))
+      .run();
+  });
+
+  safeUnlink(listPath);
+  return outPath;
+}
+
+async function synthesizeVoiceOverBySegments({ segments, voice, tone, apiKey }) {
+  const ttsVoice = resolveTtsVoice(voice);
+
+  const segmentAudioPaths = [];
+  for (const s of segments) {
+    segmentAudioPaths.push(await synthesizeSegmentAudio({
+      apiKey,
+      ttsVoice,
+      segmentText: s.text,
+      tone,
+    }));
+  }
+
+  const mergedAudioPath = path.join(TEMP_DIR, `voice_${uuidv4()}.mp3`);
+  await concatAudioMp3({ segmentAudioPaths, outPath: mergedAudioPath });
+
+  const segmentDurations = [];
+  for (const p of segmentAudioPaths) segmentDurations.push(await getMediaDuration(p));
+
+  return { mergedAudioPath, segmentAudioPaths, segmentDurations };
+}
+
+/* ============================
+   Subtitles (SRT)
+============================ */
+function formatSrtTime(seconds) {
+  const s = Math.max(0, Number(seconds || 0));
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(Math.floor(s % 60)).padStart(2, '0');
+  const ms = String(Math.floor((s - Math.floor(s)) * 1000)).padStart(3, '0');
+  return `${hh}:${mm}:${ss},${ms}`;
+}
+
+function buildSrtFromSegments({ segments, segmentDurations }) {
+  let t = 0;
+  let idx = 1;
+  const lines = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const start = t;
+    const end = t + (segmentDurations[i] || 0);
+    t = end;
+
+    const text = String(segments[i].text || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+
+    lines.push(String(idx++));
+    lines.push(`${formatSrtTime(start)} --> ${formatSrtTime(end)}`);
+    lines.push(text);
+    lines.push('');
+  }
+  return { srt: lines.join('\n'), totalDuration: t };
+}
+
+/* ============================
+   SMART PHOTO OVERLAY PLANNING
+   - respects media order (drag/drop)
+   - forces first photo into hook, last photo into cta
+   - distributes remaining photos across middle segments
+============================ */
+function distributePhotosToSegments({ segments, photos }) {
+  if (!photos.length) return segments.map(() => []);
+
+  const n = segments.length;
+
+  // default buckets
+  const buckets = Array.from({ length: n }, () => []);
+
+  // force first and last photos if we have >=2 photos
+  const first = photos[0];
+  const last = photos.length > 1 ? photos[photos.length - 1] : null;
+
+  buckets[0].push(first);
+  if (last && last !== first) buckets[n - 1].push(last);
+
+  const middle = photos.slice(1, last ? -1 : 1);
+
+  // distribute middle photos round-robin starting at segment 1 (problem) to segment n-2 (solution)
+  if (middle.length) {
+    let idx = 1;
+    const endIdx = Math.max(1, n - 2);
+    for (const p of middle) {
+      buckets[idx].push(p);
+      idx++;
+      if (idx > endIdx) idx = 1;
     }
+  }
 
-    if (!accountId) {
-        throw new Error('Account ID is required.');
-    }
+  // cap overlays per segment to avoid clutter: 2 max per segment (except solution can take 3)
+  for (let i = 0; i < buckets.length; i++) {
+    const cap = (segments[i]?.intent === 'solution') ? 3 : 2;
+    buckets[i] = buckets[i].slice(0, cap);
+  }
 
-    // Query to retrieve account wallet information
-    const walletQuery = `
-        SELECT
-            a.Id,
-            a.WalletUnits
-        FROM
-            Accounts AS a
-        WHERE
-            a.Id = @accountId;
-    `;
+  return buckets;
+}
 
-    console.log("Executing database query with accountId:", accountId);
-
-    // Execute the query with parameterized input
-    const result = await pool.request()
-        .input('accountId', sql.Int, parseInt(accountId, 10))
-        .query(walletQuery);
-
-    console.log("Query result count:", result.recordset.length);
-
-    if (result.recordset.length === 0) {
-        throw new Error('Account not found.');
-    }
-
-    const account = result.recordset[0];
-    console.log("Account found:", account.Id);
-    console.log("Wallet units:", account.WalletUnits);
-
-    // Check if wallet has sufficient units
-    if (account.WalletUnits < SCRIPT_GENERATION_COST) {
-        throw new Error(`Insufficient wallet units. You have ${account.WalletUnits} units but need ${SCRIPT_GENERATION_COST} units to generate a script.`);
-    }
-
-    console.log(`Wallet unit check passed. Account has sufficient units (required: ${SCRIPT_GENERATION_COST}).`);
-
-    // Generate script with OpenAI
-    if (!apiKey) throw new Error('OpenAI API key missing');
-    const openai = new OpenAI({ apiKey });
-    const prompt = buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone });
-
-    console.log("Calling OpenAI API to generate script...");
-
-    const response = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-            { role: 'system', content: 'You are a seasoned creative director who writes voice-over scripts like a story of their journey. Do not mention the name of the tone or voice' },
-            { role: 'user', content: prompt }
-        ],
-        max_tokens: 500,
-        temperature: 1.0
+/* ============================
+   Render plan:
+   - backgroundVideo per segment:
+      use user videos sequentially (if present)
+      else use stock by category+intent
+   - overlayPhotos per segment:
+      derived from user photos order
+============================ */
+function assignUserVideosSequential(segments, userVideos) {
+  const plan = [];
+  let vidIdx = 0;
+  for (const seg of segments) {
+    const picked = userVideos[vidIdx] || null;
+    if (picked) vidIdx++;
+    plan.push({
+      intent: normalizeIntent(seg.intent),
+      onScreenText: seg.onScreenText || '',
+      backgroundVideo: picked,     // may be null; stock will fill
+      overlayPhotos: [],           // filled later
     });
+  }
+  return plan;
+}
 
-    const raw = response?.choices?.[0]?.message?.content?.trim() || '';
+async function fillBackgroundWithStock({ plan, category }) {
+  for (const item of plan) {
+    if (item.backgroundVideo) continue;
+    item.backgroundVideo = await pickStockVideoLocalPath({ category, intent: item.intent });
+  }
+  return plan;
+}
+
+/* ============================
+   FFmpeg: segment clip with moving background + photo overlays
+   - background: loop stock video to segment duration
+   - overlay photos: each with fade in/out + gentle zoom (kenburns)
+   - add onScreenText via drawtext safely
+============================ */
+function escapeForDrawtext(text) {
+  return String(text || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+    .replace(/,/g, '\\,')
+    .replace(/%/g, '\\%')
+    .replace(/\n/g, ' ');
+}
+
+async function createSegmentClip({
+  bgVideoPath,
+  overlayPhotoPaths,   // keep name for compatibility (these become spotlight full-screen moments)
+  durationSec,
+  outPath
+}) {
+  if (!bgVideoPath || !fs.existsSync(bgVideoPath)) {
+    throw new Error('Missing bg video for segment.');
+  }
+
+  const dur = Math.max(0.8, Number(durationSec || 0.8));
+  const photos = Array.isArray(overlayPhotoPaths) ? overlayPhotoPaths.filter(p => p && fs.existsSync(p)) : [];
+  const numPhotos = photos.length;
+
+  const cmd = ffmpeg()
+    .input(bgVideoPath)
+    // loop bg enough so trim works even if bg is short
+    .inputOptions(['-stream_loop', '10']);
+
+  // add photo inputs (loop as video)
+  for (const p of photos) {
+    cmd.input(p).inputOptions(['-loop', '1']);
+  }
+
+  const filters = [];
+
+  // 1) Base background full-screen 9:16 (crop-to-fill, not pad)
+  //    - avoids “Padded dimensions cannot be smaller than input dimensions.”
+  filters.push(
+    `[0:v]` +
+    `scale=1080:1920:force_original_aspect_ratio=increase,` +
+    `crop=1080:1920,` +
+    `setsar=1,fps=30,format=yuv420p,trim=0:${dur.toFixed(3)},setpts=PTS-STARTPTS[base]`
+  );
+
+  let lastLabel = 'base';
+
+  // 2) Spotlight photos full-screen with motion + fades (they REPLACE the screen briefly)
+  //    We overlay them full-frame with alpha fade, enabled in time windows.
+if (numPhotos > 0) {
+  // 1️⃣ Decide how many photos this segment should show
+  let maxSpotlights = Math.min(numPhotos, 2);
+
+  // 🔥 NEW: if segment is short, show only ONE photo so it stays longer
+  if (dur < 3.8 && maxSpotlights === 2) {
+    maxSpotlights = 1;
+  }
+
+  const picked = photos.slice(0, maxSpotlights);
+
+  // 2️⃣ Allocate more time to photos (product-forward)
+  const PHOTO_MIN_SEC = Number(process.env.PHOTO_MIN_SEC || 5);
+  const PHOTO_MAX_SEGMENT_SHARE = Number(process.env.PHOTO_MAX_SHARE || 0.98);
+  const PHOTO_LEADIN_SEC = Number(process.env.PHOTO_LEADIN_SEC || 3);
+
+  const spotlightTotal = Math.min(
+    dur * PHOTO_MAX_SEGMENT_SHARE,
+    Math.max(PHOTO_MIN_SEC * maxSpotlights, PHOTO_MIN_SEC)
+  );
+
+  const slot = spotlightTotal / maxSpotlights;
+
+  // 3️⃣ Show photo earlier (less waiting on background)
+  const startOffset = Math.min(PHOTO_LEADIN_SEC, dur * 0.10);
+
     
-    if (!raw) {
-        throw new Error('OpenAI returned an empty response');
+
+    for (let i = 0; i < maxSpotlights; i++) {
+      const inputIndex = i + 1; // photos start at input 1
+      const st = Math.min(dur - 0.2, startOffset + i * slot);
+      const en = Math.min(dur, st + slot);
+
+      const fadeIn = Math.min(0.25, (en - st) * 0.25);
+      const fadeOut = Math.min(0.25, (en - st) * 0.25);
+
+      // Ken Burns using zoompan. We:
+      // - scale image big enough
+      // - zoom slowly
+      // - output exactly 1080x1920 @ 30fps
+      // Note: zoompan works great for stills; it will generate frames.
+      const frames = Math.max(24, Math.round((en - st) * 30));
+
+      filters.push(
+        `[${inputIndex}:v]` +
+        `scale=2400:-1:force_original_aspect_ratio=increase,` +
+        `zoompan=` +
+          `z='min(zoom+0.0012,1.12)':` +
+          `x='iw/2-(iw/zoom/2)':` +
+          `y='ih/2-(ih/zoom/2)':` +
+          `d=${frames}:` +
+          `s=1080x1920:` +
+          `fps=30,` +
+        `format=rgba,` +
+        `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+        `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+      );
+
+      // Overlay spotlight full-screen over the base during its time window.
+      // We shift spotlight timeline to match segment timeline with setpts.
+      filters.push(
+        `[sp${i}]setpts=PTS+${st.toFixed(3)}/TB[sp${i}t]`
+      );
+
+      filters.push(
+        `[${lastLabel}][sp${i}t]overlay=0:0:enable=between(t\\,${st.toFixed(3)}\\,${en.toFixed(3)})[v${i}]`
+      );
+
+      lastLabel = `v${i}`;
     }
+  }
 
-    let scriptResult;
-    try {
-        const parsed = JSON.parse(raw);
-        if (!parsed.script) throw new Error('Invalid response from OpenAI - missing script field');
-        scriptResult = {
-            script: parsed.script.trim(),
-            talkingPoints: Array.isArray(parsed.talkingPoints) ? parsed.talkingPoints : [],
-            title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : (campaignTitle || 'AI Video'),
-            description: typeof parsed.description === 'string' && parsed.description.trim()
-                ? parsed.description.trim()
-                : (campaignDescription || scriptContext || ''),
-            tokensUsed: response?.usage?.total_tokens || null
-        };
-    } catch (err) {
-        console.log("OpenAI response was not JSON, using raw text as script");
-        scriptResult = {
-            script: raw,
-            talkingPoints: [],
-            title: campaignTitle || 'AI Video',
-            description: campaignDescription || scriptContext || '',
-            tokensUsed: response?.usage?.total_tokens || null
-        };
-    }
+  // Always end with vout
+  filters.push(`[${lastLabel}]null[vout]`);
 
-    console.log(`Script generated successfully, now deducting ${SCRIPT_GENERATION_COST} wallet units...`);
+  const filtergraph = filters.join(';');
 
-    // Deduct units from wallet after successful script generation
-    const updateQuery = `
-        UPDATE Accounts
-        SET WalletUnits = WalletUnits - @cost
-        WHERE Id = @accountId;
-    `;
-
-    await pool.request()
-        .input('accountId', sql.Int, parseInt(accountId, 10))
-        .input('cost', sql.Int, SCRIPT_GENERATION_COST)
-        .query(updateQuery);
-
-    const newBalance = account.WalletUnits - SCRIPT_GENERATION_COST;
-    console.log(`Successfully deducted ${SCRIPT_GENERATION_COST} units from account:`, accountId);
-    console.log("New wallet balance:", newBalance);
-
-    // Add the deduction info to the result for the client
-    scriptResult.walletUnitsDeducted = SCRIPT_GENERATION_COST;
-    scriptResult.remainingWalletUnits = newBalance;
-
-    return scriptResult;
+  await new Promise((resolve, reject) => {
+    cmd
+      .outputOptions([
+        '-t', String(dur),
+        '-filter_complex', filtergraph,
+        '-map', '[vout]',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '30',
+        '-pix_fmt', 'yuv420p',
+        '-an',
+        '-movflags', '+faststart',
+      ])
+      .output(outPath)
+      .on('end', resolve)
+      .on('error', (err, _stdout, stderr) => reject(new Error(stderr || err.message)))
+      .run();
+  });
 }
 
 
-async function synthesizeVoiceOver({ script, voice, tone, apiKey }) {
-    if (!apiKey) throw new Error('OpenAI API key missing for TTS');
 
-    const ttsVoice = OPENAI_TTS_VOICE_MAP[voice] || 'alloy';
-    const openai = new OpenAI({ apiKey });
-    const audioPath = path.join(TEMP_DIR, `voice_${uuidv4()}.mp3`);
 
-    const ttsInput = script;
 
-    const response = await openai.audio.speech.create({
-        model: 'gpt-4o-mini-tts',
-        voice: ttsVoice,
-        input: ttsInput
-    });
+async function createVideoFromSmartPlan({
+  smartPlan,
+  segmentDurations,
+  outputVideoPath,
+  voiceAudioPath,
+  backgroundMusicPath = null,
+  subtitlesSrtPath = null,
+}) {
+  if (!smartPlan?.length) throw new Error('Smart plan empty.');
+  if (smartPlan.length !== segmentDurations.length) throw new Error('Plan/duration mismatch.');
+  if (!voiceAudioPath || !fs.existsSync(voiceAudioPath)) throw new Error('Voice audio missing.');
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    fs.writeFileSync(audioPath, buffer);
-    return audioPath;
+  const clips = [];
+  for (let i = 0; i < smartPlan.length; i++) {
+    const seg = smartPlan[i];
+    const dur = Math.max(0.8, Number(segmentDurations[i] || 0.8));
+    const clipPath = path.join(TEMP_DIR, `segclip_${i}_${uuidv4()}.mp4`);
+
+   await createSegmentClip({
+  bgVideoPath: seg.backgroundVideo,
+  overlayPhotoPaths: seg.overlayPhotos || [],
+  durationSec: dur,
+  outPath: clipPath
+});
+
+    clips.push(clipPath);
+  }
+
+  // Concat video clips
+  const concatList = path.join(TEMP_DIR, `vconcat_${uuidv4()}.txt`);
+  fs.writeFileSync(concatList, clips.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'));
+
+  const cmd = ffmpeg()
+    .input(concatList)
+    .inputOptions(['-f', 'concat', '-safe', '0'])
+    .input(voiceAudioPath);
+
+  const hasBg = backgroundMusicPath && fs.existsSync(backgroundMusicPath);
+  if (hasBg) cmd.input(backgroundMusicPath);
+
+  const subtitleBurnIn = String(process.env.SUBTITLE_BURNIN || 'true').toLowerCase() !== 'false';
+
+  const filters = [];
+  let vMap = '0:v';
+  let aOut = '1:a';
+
+  if (subtitlesSrtPath && subtitleBurnIn) {
+    filters.push(`[0:v]subtitles='${subtitlesSrtPath.replace(/:/g, '\\:').replace(/'/g, "\\'")}'[vsub]`);
+    vMap = '[vsub]';
+  }
+
+  if (hasBg) {
+    filters.push(
+      `[1:a]volume=1.0[voice];` +
+      `[2:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];` +
+      `[voice][bg]amix=inputs=2:duration=shortest[aout]`
+    );
+    aOut = '[aout]';
+  }
+
+  if (filters.length) cmd.complexFilter(filters.join(';'));
+
+  await new Promise((resolve, reject) => {
+    cmd.outputOptions([
+      '-map', vMap,
+      '-map', aOut,
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '30',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-shortest',
+      '-movflags', '+faststart',
+    ])
+      .output(outputVideoPath)
+      .on('end', resolve)
+      .on('error', (err, _stdout, stderr) => reject(new Error(stderr || err.message)))
+      .run();
+  });
+
+  safeUnlink(concatList);
+  clips.forEach(safeUnlink);
 }
 
-async function downloadBackgroundMusicFromS3(backgroundMusic) {
-    const s3 = new AWS.S3();
-    
-    if (backgroundMusic) {
-        // Specific file requested
-        const s3Key = `${S3_AUDIO_PREFIX}${backgroundMusic}`;
-        const localPath = path.join(TEMP_DIR, `bg_${uuidv4()}.mp3`);
-        
-        try {
-            console.log(`Downloading background music from S3: ${s3Key}`);
-            const params = {
-                Bucket: S3_BUCKET,
-                Key: s3Key
-            };
-            const data = await s3.getObject(params).promise();
-            fs.writeFileSync(localPath, data.Body);
-            console.log('Background music downloaded successfully');
-            return localPath;
-        } catch (err) {
-            console.warn('Failed to download background music from S3:', err.message);
-            return null;
-        }
-    } else {
-        // Pick random music from S3
-        try {
-            console.log('Fetching random background music from S3...');
-            const listParams = {
-                Bucket: S3_BUCKET,
-                Prefix: S3_AUDIO_PREFIX
-            };
-            const s3Files = await s3.listObjectsV2(listParams).promise();
-            const audioFiles = (s3Files.Contents || [])
-                .map(obj => obj.Key)
-                .filter(key => key.toLowerCase().match(/\.(mp3|wav|m4a|aac)$/));
-            
-            if (audioFiles.length > 0) {
-                const randomKey = audioFiles[Math.floor(Math.random() * audioFiles.length)];
-                const localPath = path.join(TEMP_DIR, `bg_${uuidv4()}.mp3`);
-                
-                console.log(`Downloading random background music: ${randomKey}`);
-                const data = await s3.getObject({ 
-                    Bucket: S3_BUCKET, 
-                    Key: randomKey 
-                }).promise();
-                fs.writeFileSync(localPath, data.Body);
-                console.log('Random background music downloaded:', path.basename(randomKey));
-                return localPath;
-            } else {
-                console.warn('No audio files found in S3 bucket');
-                return null;
-            }
-        } catch (err) {
-            console.warn('Failed to fetch random background music from S3:', err.message);
-            return null;
-        }
-    }
-}
-
+/* ============================
+   Upload output to S3 (OLD LOCATION)
+============================ */
 async function uploadVideoToS3(localPath, jobId) {
-    const s3 = new AWS.S3();
-    const fileStream = fs.createReadStream(localPath);
-    const uploadParams = {
-        Bucket: S3_BUCKET,
-        Key: `${S3_VIDEO_PREFIX}${jobId}.mp4`,
-        Body: fileStream,
-        ContentType: 'video/mp4',
-       // ACL: 'public-read'
-    };
-
-    try {
-        console.log('Uploading video to S3...');
-        const result = await s3.upload(uploadParams).promise();
-        console.log('Video uploaded to S3:', result.Location);
-        return result.Location;
-    } catch (err) {
-        console.error('Failed to upload video to S3:', err);
-        throw err;
-    }
+  const result = await s3.upload({
+    Bucket: OUTPUT_BUCKET,
+    Key: `${S3_VIDEO_PREFIX}${jobId}.mp4`,
+    Body: fs.createReadStream(localPath),
+    ContentType: 'video/mp4',
+  }).promise();
+  return result.Location;
 }
 
-function registerJob({ filePath, audioPath, script, voice, tone, duration }) {
-    const jobId = uuidv4();
-    const record = {
-        id: jobId,
-        path: filePath,
-        audioPath,
-        script,
-        voice,
-        tone,
-        duration,
-        createdAt: Date.now(),
-        expiresAt: Date.now() + JOB_TTL_MS,
-        filename: path.basename(filePath)
-    };
-    videoJobs.set(jobId, record);
-    const timeout = setTimeout(() => cleanupJob(jobId), JOB_TTL_MS);
-    if (typeof timeout.unref === 'function') timeout.unref();
-    return record;
+async function uploadTextToS3(text, jobId) {
+  const result = await s3.upload({
+    Bucket: OUTPUT_BUCKET,
+    Key: `${S3_VIDEO_PREFIX}${jobId}.srt`,
+    Body: Buffer.from(text, 'utf-8'),
+    ContentType: 'application/x-subrip',
+  }).promise();
+  return result.Location;
 }
 
+/* ============================
+   ROUTES
+============================ */
+
+// script
 router.post('/ai-video/script', upload.none(), async (req, res) => {
-    const {
+  const {
+    campaignTitle,
+    campaignDescription,
+    scriptContext,
+    category,          // ✅ accept category (optional)
+    voice = 'Ava',
+    tone = 'friendly',
+    accountId
+  } = req.body;
+
+  if (!accountId) {
+    return res.status(400).json({ error: 'accountId is required' });
+  }
+
+  const categorySlug = normalizeCategory(category);
+
+  const apiKey = req.openai_api_key || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'OpenAI key not configured' });
+  }
+
+  try {
+    const scriptObj = await generateSegmentedScript({
+      apiKey,
+      payload: {
         campaignTitle,
         campaignDescription,
         scriptContext,
-        voice = 'Ava',
-        tone = 'Friendly',
-        accountId  // Add accountId from request body
-    } = req.body;
-
-    // Validate required fields
-    if (!campaignDescription && !scriptContext) {
-        return res.status(400).json({ error: 'Provide campaignDescription or scriptContext' });
-    }
-
-    if (!accountId) {
-        return res.status(400).json({ error: 'accountId is required' });
-    }
-
-    // Get the database pool from app.locals
-    const pool = req.app.locals.db;
-    
-    if (!pool) {
-        return res.status(500).json({ 
-            error: 'Database connection not available.',
-            details: 'Database pool not found in app.locals'
-        });
-    }
-
-    try {
-        const scriptResponse = await requestScriptFromOpenAI({
-            apiKey: req.openai_api_key || process.env.OPENAI_API_KEY,
-            campaignTitle,
-            campaignDescription,
-            scriptContext,
-            voice,
-            tone,
-            accountId,      // Pass accountId
-            pool: pool      // Pass pool
-        });
-
-        res.json({
-            script: scriptResponse.script,
-            talkingPoints: scriptResponse.talkingPoints,
-            voice,
-            tone,
-            title: scriptResponse.title,
-            description: scriptResponse.description,
-            tokensUsed: scriptResponse.tokensUsed
-        });
-    } catch (err) {
-        console.error('AI video script error:', err);
-        res.status(500).json({ error: 'Failed to generate script', details: err.message });
-    }
-});
-
-
-router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
-    let { script, voice = 'Ava', tone = 'Friendly', media, backgroundMusic, accountId } = req.body;
-
-    if (!script || typeof script !== 'string') {
-        return res.status(400).json({ error: 'Script text is required' });
-    }
-
-    if (!accountId) {
-        return res.status(400).json({ error: 'accountId is required' });
-    }
-
-    // Get the database pool from app.locals
-    const pool = req.app.locals.db;
-    
-    if (!pool) {
-        return res.status(500).json({ 
-            error: 'Database connection not available.',
-            details: 'Database pool not found in app.locals'
-        });
-    }
-
-    if (typeof media === 'string') {
-        try {
-            media = JSON.parse(media);
-        } catch (err) {
-            return res.status(400).json({ error: 'Media payload must be valid JSON array' });
-        }
-    }
-
-    if (!Array.isArray(media) || !media.length) {
-        return res.status(400).json({ error: 'Media array is required' });
-    }
-
-    const tempFiles = [];
-    let audioPath = null;
-    let audioDuration = null;
-    let backgroundMusicPath = null;
-    let finalVideoPath = null;
-
-    try {
-        // ===== CHECK WALLET UNITS BEFORE PROCESSING =====
-        const walletQuery = `
-            SELECT
-                a.Id,
-                a.WalletUnits
-            FROM
-                Accounts AS a
-            WHERE
-                a.Id = @accountId;
-        `;
-
-        console.log("Checking wallet units for accountId:", accountId);
-
-        const result = await pool.request()
-            .input('accountId', sql.Int, parseInt(accountId, 10))
-            .query(walletQuery);
-
-        if (result.recordset.length === 0) {
-            return res.status(404).json({ error: 'Account not found.' });
-        }
-
-        const account = result.recordset[0];
-        console.log("Account found:", account.Id);
-        console.log("Wallet units:", account.WalletUnits);
-
-        // Check if wallet has sufficient units
-        if (account.WalletUnits < VIDEO_GENERATION_COST) {
-            return res.status(400).json({
-                error: 'Insufficient wallet units.',
-                message: `You have ${account.WalletUnits} units but need ${VIDEO_GENERATION_COST} units to generate a video.`,
-                currentWalletUnits: account.WalletUnits,
-                requiredUnits: VIDEO_GENERATION_COST
-            });
-        }
-
-        console.log(`Wallet unit check passed. Account has sufficient units (required: ${VIDEO_GENERATION_COST}).`);
-        // ===== END WALLET CHECK =====
-
-        audioPath = await synthesizeVoiceOver({
-            script,
-            voice,
-            tone,
-            apiKey: req.openai_api_key || process.env.OPENAI_API_KEY
-        });
-        audioDuration = await getMediaDuration(audioPath);
-        if (!audioDuration || !Number.isFinite(audioDuration) || audioDuration <= 0) {
-            throw new Error('Unable to determine voiceover duration');
-        }
-        
-        // Download background music from S3
-        backgroundMusicPath = await downloadBackgroundMusicFromS3(backgroundMusic);
-        if (backgroundMusicPath) {
-            tempFiles.push(backgroundMusicPath);
-        }
-        
-        const mediaPaths = [];
-
-        // Download all media files
-        for (let i = 0; i < media.length; i++) {
-            const mediaItem = media[i];
-            if (!mediaItem?.filePath) continue;
-
-            const localPath = await downloadFileIfNeeded(mediaItem.filePath);
-            tempFiles.push(localPath);
-            mediaPaths.push(localPath);
-        }
-
-        if (!mediaPaths.length) {
-            throw new Error('No usable media files were provided');
-        }
-
-        // Use voiceover duration as the source of truth for the video length
-        const totalDuration = audioDuration;
-
-        finalVideoPath = path.join(TEMP_DIR, `ai_video_${uuidv4()}.mp4`);
-        
-        await createVideoWithTransitions(mediaPaths, finalVideoPath, totalDuration, audioPath, backgroundMusicPath);
-
-        // Generate job ID
-        const jobId = uuidv4();
-        
-        // Upload video to S3
-        const s3VideoUrl = await uploadVideoToS3(finalVideoPath, jobId);
-        
-        // Clean up the local video file immediately after upload
-        safeUnlink(finalVideoPath);
-        safeUnlink(audioPath);
-
-        const job = registerJob({
-            filePath: s3VideoUrl,
-            audioPath: null,
-            script,
-            voice,
-            tone,
-            duration: totalDuration
-        });
-
-        // ===== DEDUCT WALLET UNITS AFTER SUCCESSFUL VIDEO GENERATION =====
-        console.log(`Video generated successfully, now deducting ${VIDEO_GENERATION_COST} wallet units...`);
-
-        const updateQuery = `
-            UPDATE Accounts
-            SET WalletUnits = WalletUnits - @cost
-            WHERE Id = @accountId;
-        `;
-
-        await pool.request()
-            .input('accountId', sql.Int, parseInt(accountId, 10))
-            .input('cost', sql.Int, VIDEO_GENERATION_COST)
-            .query(updateQuery);
-
-        const newBalance = account.WalletUnits - VIDEO_GENERATION_COST;
-        console.log(`Successfully deducted ${VIDEO_GENERATION_COST} units from account:`, accountId);
-        console.log("New wallet balance:", newBalance);
-        // ===== END WALLET DEDUCTION =====
-
-        res.json({
-            jobId: job.id,
-            videoUrl: s3VideoUrl,
-            downloadUrl: s3VideoUrl,
-            expiresAt: new Date(job.expiresAt).toISOString(),
-            voice,
-            tone,
-            script,
-            duration: totalDuration,
-            backgroundMusic: backgroundMusic || 'random',
-            walletUnitsDeducted: VIDEO_GENERATION_COST,
-            remainingWalletUnits: newBalance
-        });
-    } catch (err) {
-        console.error('AI video generation error:', err);
-        tempFiles.forEach(safeUnlink);
-        safeUnlink(audioPath);
-        safeUnlink(finalVideoPath);
-        return res.status(500).json({ error: 'Failed to generate AI video', details: err.message });
-    } finally {
-        // Cleanup downloaded media files
-        tempFiles.forEach(safeUnlink);
-    }
-});
-
-router.get('/ai-video/jobs/:jobId', (req, res) => {
-    const job = getActiveJob(req.params.jobId);
-    if (!job) return res.status(404).json({ error: 'Job not found or expired' });
-
-    res.json({
-        jobId: job.id,
-        filename: job.filename,
-        videoUrl: job.path,
-        downloadUrl: job.path,
-        expiresAt: new Date(job.expiresAt).toISOString(),
-        voice: job.voice,
-        tone: job.tone,
-        script: job.script,
-        duration: job.duration
+        category: categorySlug,   // ✅ FIXED
+        voice,
+        tone
+      }
     });
+
+    const pool = getDbPoolFromReq(req);
+    const { remainingWalletUnits } = await deductWalletUnitsAtomic({
+      pool,
+      accountId,
+      cost: SCRIPT_GENERATION_COST
+    });
+
+    return res.json({
+      ...scriptObj,
+      category: categorySlug,
+      voice,
+      tone,
+      walletUnitsDeducted: SCRIPT_GENERATION_COST,
+      remainingWalletUnits
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      error: 'Failed to generate script',
+      details: err.message
+    });
+  }
+});
+
+// generate-video (SMART: moving stock background + user photos overlaid)
+router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
+ 
+
+  let {
+    category,
+    voice = 'Ava',
+    tone = 'friendly',
+    campaignTitle,
+    campaignDescription,
+    scriptContext,
+
+    segments,               // optional: JSON string or array
+    media,                  // optional: JSON string or array: [{filePath}]
+    backgroundMusic,        // optional filename
+    subtitles = false,
+    accountId
+  } = req.body;
+const categorySlug = normalizeCategory(category);
+
+ // if (!category) return res.status(400).json({ error: 'category is required' });
+  if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+
+  if (typeof media === 'string') {
+    try { media = JSON.parse(media); } catch { return res.status(400).json({ error: 'media must be valid JSON array' }); }
+  }
+  if (media && !Array.isArray(media)) return res.status(400).json({ error: 'media must be an array of {filePath}' });
+
+  if (typeof segments === 'string') {
+    try { segments = JSON.parse(segments); } catch { return res.status(400).json({ error: 'segments must be valid JSON array' }); }
+  }
+
+  const apiKey = req.openai_api_key || process.env.OPENAI_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'OpenAI key not configured' });
+
+  const tempFiles = [];
+  let bgMusicPath = null;
+  let finalVideoPath = null;
+  let srtLocalPath = null;
+
+  try {
+    const pool = getDbPoolFromReq(req);
+
+    // Wallet check
+    const walletRow = await pool.request()
+      .input('accountId', sql.Int, parseInt(accountId, 10))
+      .query(`SELECT Id, WalletUnits FROM Accounts WHERE Id = @accountId;`);
+
+    if (!walletRow.recordset?.length) return res.status(404).json({ error: 'Account not found.' });
+    const currentUnits = walletRow.recordset[0].WalletUnits;
+
+    if (currentUnits < VIDEO_GENERATION_COST) {
+      return res.status(400).json({
+        error: 'Insufficient wallet units.',
+        message: `You have ${currentUnits} units but need ${VIDEO_GENERATION_COST} units to generate a video.`,
+        currentWalletUnits: currentUnits,
+        requiredUnits: VIDEO_GENERATION_COST
+      });
+    }
+
+    // 1) Script segments
+    let scriptObj;
+    if (Array.isArray(segments) && segments.length) {
+      scriptObj = {
+        title: String(campaignTitle || '').trim(),
+        description: '',
+        segments: enforceIntents(segments),
+      };
+    } else {
+      scriptObj = await generateSegmentedScript({
+        apiKey,
+        payload: {
+  campaignTitle,
+  campaignDescription,
+  scriptContext,
+  category: categorySlug,
+  voice,
+  tone
+}
+
+      });
+    }
+    if (!scriptObj.segments?.length) throw new Error('No script segments available.');
+
+    // 2) Download user media in drag order
+    const userVideos = [];
+    const userPhotos = [];
+
+    const mediaArr = Array.isArray(media) ? media : [];
+    for (const m of mediaArr) {
+      if (!m?.filePath) continue;
+      const local = await downloadFileIfNeeded(m.filePath);
+      tempFiles.push(local);
+
+      if (isVideoPath(local)) userVideos.push(local);
+      if (isImagePath(local)) userPhotos.push(local);
+    }
+
+    // 3) Voiceover by segments
+    const { mergedAudioPath, segmentAudioPaths, segmentDurations } =
+      await synthesizeVoiceOverBySegments({ segments: scriptObj.segments, voice, tone, apiKey });
+
+    tempFiles.push(mergedAudioPath, ...segmentAudioPaths);
+
+    // 4) Background music
+    bgMusicPath = await downloadBackgroundMusicFromS3(backgroundMusic);
+    if (bgMusicPath) tempFiles.push(bgMusicPath);
+
+    // 5) Build SMART plan: moving background + photo overlays
+    const catSlug = normalizeCategory(category);
+
+    // Background assignment: user videos first, else stock
+    let plan = assignUserVideosSequential(scriptObj.segments, userVideos);
+    plan = await fillBackgroundWithStock({ plan, category: catSlug });
+
+    if (plan.some(p => !p.backgroundVideo)) {
+      throw new Error('Some segments missing background video after stock fill. Seed your S3 stock prefixes.');
+    }
+
+    // Photo overlays assignment (smart, respects order)
+    const photoBuckets = distributePhotosToSegments({ segments: scriptObj.segments, photos: userPhotos });
+    for (let i = 0; i < plan.length; i++) {
+      plan[i].overlayPhotos = photoBuckets[i] || [];
+      plan[i].intent = normalizeIntent(scriptObj.segments[i].intent);
+      plan[i].onScreenText = scriptObj.segments[i].onScreenText || plan[i].onScreenText || '';
+    }
+
+    // 6) Subtitles
+    let srtText = null;
+    const subtitlesOn = (String(subtitles).toLowerCase() === 'true' || subtitles === true);
+    if (subtitlesOn) {
+      const { srt } = buildSrtFromSegments({ segments: scriptObj.segments, segmentDurations });
+      srtText = srt;
+      srtLocalPath = path.join(TEMP_DIR, `subs_${uuidv4()}.srt`);
+      fs.writeFileSync(srtLocalPath, srtText, 'utf-8');
+      tempFiles.push(srtLocalPath);
+    }
+
+    // 7) Render final video
+    finalVideoPath = path.join(TEMP_DIR, `ai_video_${uuidv4()}.mp4`);
+    await createVideoFromSmartPlan({
+      smartPlan: plan,
+      segmentDurations,
+      outputVideoPath: finalVideoPath,
+      voiceAudioPath: mergedAudioPath,
+      backgroundMusicPath: bgMusicPath,
+      subtitlesSrtPath: subtitlesOn ? srtLocalPath : null,
+    });
+
+    // 8) Upload to S3 (OLD LOCATION)
+    const uploadId = uuidv4();
+    const videoUrl = await uploadVideoToS3(finalVideoPath, uploadId);
+    safeUnlink(finalVideoPath);
+
+    let srtUrl = null;
+    if (subtitlesOn && srtText) srtUrl = await uploadTextToS3(srtText, uploadId);
+
+    // 9) Register job
+    const totalDuration = segmentDurations.reduce((a, b) => a + (b || 0), 0);
+    const job = registerJob({
+      filePath: videoUrl,
+      script: JSON.stringify(scriptObj),
+      voice,
+      tone,
+      duration: totalDuration
+    });
+
+    // 10) Deduct wallet after success (atomic)
+    const { remainingWalletUnits } = await deductWalletUnitsAtomic({
+      pool,
+      accountId,
+      cost: VIDEO_GENERATION_COST
+    });
+
+    return res.json({
+      jobId: job.id,
+      videoUrl,
+      downloadUrl: videoUrl,
+      srtUrl,
+      expiresAt: new Date(job.expiresAt).toISOString(),
+      voice,
+      tone,
+      category: catSlug,
+      script: scriptObj,
+      duration: totalDuration,
+      backgroundMusic: backgroundMusic || (bgMusicPath ? 'random' : 'none'),
+      walletUnitsDeducted: VIDEO_GENERATION_COST,
+      remainingWalletUnits,
+      // debug info
+      smart: {
+        userVideos: userVideos.length,
+        userPhotos: userPhotos.length,
+        plan: plan.map(p => ({
+          intent: p.intent,
+          usedUserVideo: userVideos.includes(p.backgroundVideo),
+          overlayPhotos: (p.overlayPhotos || []).length
+        }))
+      },
+      outputLocation: { bucket: OUTPUT_BUCKET, prefix: S3_VIDEO_PREFIX }
+    });
+
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to generate AI video', details: err.message });
+  } finally {
+    tempFiles.forEach(safeUnlink);
+    safeUnlink(bgMusicPath);
+    safeUnlink(finalVideoPath);
+    safeUnlink(srtLocalPath);
+  }
+});
+
+// Jobs endpoints
+router.get('/ai-video/jobs/:jobId', (req, res) => {
+  const job = getActiveJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found or expired' });
+
+  return res.json({
+    jobId: job.id,
+    videoUrl: job.path,
+    downloadUrl: job.path,
+    expiresAt: new Date(job.expiresAt).toISOString(),
+    voice: job.voice,
+    tone: job.tone,
+    script: job.script,
+    duration: job.duration
+  });
 });
 
 router.delete('/ai-video/jobs/:jobId', (req, res) => {
-    const job = videoJobs.get(req.params.jobId);
-    if (!job) return res.status(404).json({ error: 'Job not found' });
-
-    cleanupJob(req.params.jobId);
-    res.json({ success: true });
+  const job = videoJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  cleanupJob(req.params.jobId);
+  return res.json({ success: true });
 });
 
 router.get('/ai-video/video/:jobId', (req, res) => {
-    const job = getActiveJob(req.params.jobId);
-    if (!job) return res.status(404).json({ error: 'Video not found or expired' });
-
-    // If it's an S3 URL, redirect to it
-    if (job.path.startsWith('http')) {
-        return res.redirect(job.path);
-    }
-
-    // Fallback for local files (shouldn't happen in Lambda production)
-    const mimeType = inferMimeType(job.path);
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="${job.filename}"`);
-    res.sendFile(path.resolve(job.path), (err) => {
-        if (err) {
-            console.error('Error streaming AI video:', err);
-            if (!res.headersSent) res.status(500).json({ error: 'Failed to stream media file' });
-        }
-    });
+  const job = getActiveJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Video not found or expired' });
+  if (job.path.startsWith('http')) return res.redirect(job.path);
+  return res.status(400).json({ error: 'Unexpected local path in job record' });
 });
 
 module.exports = router;
+
+
+
