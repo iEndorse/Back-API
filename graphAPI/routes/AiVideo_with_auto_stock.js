@@ -981,6 +981,7 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
   }
 });
 
+
 // generate-video (with Pexels integration)
 router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
   let {
@@ -988,7 +989,7 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
     voice = 'Ava',
     tone = 'friendly',
     campaignTitle,
-    campaignDescription,
+    campaignDescription ,
     scriptContext,
     segments,
     media,

@@ -19,7 +19,7 @@ const engagementRoutes = require('./routes/engagement');
 const imageTextRoutes = require('./routes/imagetext');
 const ocrRoutes = require('./routes/ocrRoutes');
 const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js');
-const aiVideoRoute = require('./routes/AiVideo_with_auto_stock.js');
+const aiVideoRoute = require('./routes/AiVideo.js');
 
 // CORS Configuration
 const allowedOrigins = [
