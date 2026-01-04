@@ -1086,7 +1086,26 @@ async function uploadTextToS3(text, jobId) {
 //   }
 // });
 
+function buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone }) {
+    return `
+You are an AI video copywriter for IEndorse campaigns.
+Write a short but punchy video script that ALWAYS includes the company name inside the video title using the details below.
+Voice Talent: ${voice || 'Default'}
+Tone: ${tone || 'Friendly'}
 
+Return JSON ONLY in the following format:
+{
+  "title": "punchy 5-10 word video title",
+  "description": "1-2 sentence summary (max ~200 characters) of the story viewers will hear",
+  "script": "full script text",
+  "talkingPoints": ["bullet 1", "bullet 2"]
+}
+
+Campaign Title (MUST include company name): ${campaignTitle || 'Untitled Campaign'}
+Campaign Description: ${campaignDescription || 'N/A'}
+Additional Context: ${scriptContext || 'N/A'}
+`;
+}
 async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescription, scriptContext, voice, tone, accountId, pool }) {
 
     // Check for wallet unit availability
