@@ -845,9 +845,9 @@ async function createSegmentClip({
 
     const picked = photos.slice(0, maxSpotlights);
 
-    const PHOTO_MIN_SEC = Number(process.env.PHOTO_MIN_SEC || 5);
-    const PHOTO_MAX_SEGMENT_SHARE = Number(process.env.PHOTO_MAX_SHARE || 0.98);
-    const PHOTO_LEADIN_SEC = Number(process.env.PHOTO_LEADIN_SEC || 3);
+    const PHOTO_MIN_SEC = Number(process.env.PHOTO_MIN_SEC || 3);
+    const PHOTO_MAX_SEGMENT_SHARE = Number(process.env.PHOTO_MAX_SHARE || 0.92);
+    const PHOTO_LEADIN_SEC = Number(process.env.PHOTO_LEADIN_SEC || 0.08);
 
     const spotlightTotal = Math.min(
       dur * PHOTO_MAX_SEGMENT_SHARE,
@@ -1281,6 +1281,52 @@ router.post('/ai-video/script', upload.none(), async (req, res) => {
     }
 });
 
+router.post('/ai-video/voice-sample', async (req, res) => {
+  const { voice = 'alloy' } = req.body;
+
+  // UI labels -> OpenAI voice ids
+  const voiceMap = {
+    Ava: 'alloy',
+    Noah: 'echo',
+    Sofia: 'shimmer',
+    Mason: 'onyx',
+  };
+
+  const allowedVoices = new Set(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']);
+  const openaiVoice = allowedVoices.has(voice) ? voice : (voiceMap[voice] || 'alloy');
+
+  try {
+    const openai = new OpenAI({
+      apiKey: req.openai_api_key || process.env.OPENAI_API_KEY,
+    });
+
+    console.log(`Generating voice sample for "${voice}" -> "${openaiVoice}"`);
+
+    const mp3 = await openai.audio.speech.create({
+      model: 'tts-1',
+      voice: openaiVoice,
+      input: `Hello! This is ${voice} speaking. I'm here to help you create amazing content.`,
+    });
+
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+
+  res.set({
+  "Content-Type": "audio/mpeg",
+  "Content-Disposition": `inline; filename="voice-sample-${openaiVoice}.mp3"`,
+  "Cache-Control": "no-store",
+});
+
+return res.status(200).end(buffer);
+
+
+  } catch (error) {
+    console.error('Error generating voice sample:', error);
+    return res.status(500).json({
+      error: 'Failed to generate voice sample',
+      details: error?.message || String(error),
+    });
+  }
+});
 
 // ✅ UPDATED generate-video (accepts `script` payload and infers category/context)
 router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
