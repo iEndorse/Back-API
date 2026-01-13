@@ -570,8 +570,83 @@ async function downloadPexelsVideo({
 /* ============================
    Segmented script generator
 ============================ */
+// function buildSegmentedScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone, category }) {
+//   return `
+// You are a campaign copywriter for small and medium business owners.
+
+// Return JSON ONLY:
+// {
+//   "title": "5-10 word title INCLUDING the company name",
+//   "description": "1-2 sentence summary (<= 200 chars)",
+//   "segments": [
+//     { "id": "hook", "intent": "hook", "text": "2-3 sentence"},
+//     { "id": "problem", "intent": "problem", "text": "2-3 sentences"},
+//     { "id": "solution", "intent": "solution", "text": "2-3 sentences"},
+//     { "id": "cta", "intent": "cta", "text": "2-3 short sentence"}
+//   ]
+// }
+
+// Tone: ${tone || 'friendly'}
+// Voice Talent: ${voice || 'default'}
+// Category: ${category || 'general'}
+
+// Campaign Title: ${campaignTitle || 'Untitled Campaign'}
+// Campaign Description: ${campaignDescription || 'N/A'}
+// Additional Context: ${scriptContext || 'N/A'}
+// `;
+// }
+
 function buildSegmentedScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone, category }) {
-  return `
+  // Auto-detect if this is news content based on category or context
+  const newsCategories = [
+    'news', 'breaking news', 'update', 'updates', 'innovation', 
+    'announcement', 'press release', 'industry news', 'technology news',
+    'market update', 'company news', 'product launch news'
+  ];
+  
+  const isNews = newsCategories.some(cat => 
+    (category || '').toLowerCase().includes(cat) ||
+    (campaignTitle || '').toLowerCase().includes('news') ||
+    (campaignTitle || '').toLowerCase().includes('update') ||
+    (campaignDescription || '').toLowerCase().includes('breaking')
+  );
+
+  if (isNews) {
+    // NEWS PROMPT
+    return `
+You are a professional broadcast news writer creating scripts for video news segments similar to CNN, BBC, or Reuters.
+
+Return JSON ONLY:
+{
+  "title": "5-10 word news headline",
+  "description": "1-2 sentence news summary (<= 200 chars)",
+  "segments": [
+    { "id": "lede", "intent": "lede", "text": "2-3 sentences opening with the most critical information (who, what, when, where)"},
+    { "id": "context", "intent": "context", "text": "2-3 sentences providing background and why this matters"},
+    { "id": "details", "intent": "details", "text": "2-3 sentences with key facts, quotes, or data"},
+    { "id": "impact", "intent": "impact", "text": "2-3 sentences on implications and what comes next"}
+  ]
+}
+
+Writing Guidelines:
+- Use active voice and present tense for immediacy
+- Lead with the most newsworthy information
+- Be factual, objective, and authoritative
+- Write for spoken delivery (shorter sentences, natural rhythm)
+- Avoid jargon unless explaining it
+- Include attribution for claims and sources where relevant
+
+Tone: ${tone || 'authoritative and professional'}
+Voice Talent: ${voice || 'default'}
+Category: ${category || 'breaking news'}
+
+News Title: ${campaignTitle || 'Breaking News'}
+News Description: ${campaignDescription || 'N/A'}
+Additional Context: ${scriptContext || 'N/A'}
+`;
+  } else {
+    // MARKETING PROMPT
+    return `
 You are a campaign copywriter for small and medium business owners.
 
 Return JSON ONLY:
@@ -594,6 +669,7 @@ Campaign Title: ${campaignTitle || 'Untitled Campaign'}
 Campaign Description: ${campaignDescription || 'N/A'}
 Additional Context: ${scriptContext || 'N/A'}
 `;
+  }
 }
 
 async function generateSegmentedScript({ apiKey, payload }) {
@@ -806,6 +882,115 @@ async function fillBackgroundWithPexels({
 /* ============================
    FFmpeg: segment clip
 ============================ */
+// async function createSegmentClip({
+//   bgVideoPath,
+//   overlayPhotoPaths,
+//   durationSec,
+//   outPath
+// }) {
+//   if (!bgVideoPath || !fs.existsSync(bgVideoPath)) {
+//     throw new Error('Missing bg video for segment.');
+//   }
+
+//   const dur = Math.max(0.8, Number(durationSec || 0.8));
+//   const photos = Array.isArray(overlayPhotoPaths) ? overlayPhotoPaths.filter(p => p && fs.existsSync(p)) : [];
+//   const numPhotos = photos.length;
+
+//   const cmd = ffmpeg()
+//     .input(bgVideoPath)
+//     .inputOptions(['-stream_loop', '10']);
+
+//   for (const p of photos) {
+//     cmd.input(p).inputOptions(['-loop', '1']);
+//   }
+
+//   const filters = [];
+
+//   filters.push(
+//     `[0:v]` +
+//     `scale=1080:1920:force_original_aspect_ratio=increase,` +
+//     `crop=1080:1920,` +
+//     `setsar=1,fps=30,format=yuv420p,trim=0:${dur.toFixed(3)},setpts=PTS-STARTPTS[base]`
+//   );
+
+//   let lastLabel = 'base';
+
+//   if (numPhotos > 0) {
+//     let maxSpotlights = Math.min(numPhotos, 2);
+//     if (dur < 3.8 && maxSpotlights === 2) maxSpotlights = 1;
+
+//     const picked = photos.slice(0, maxSpotlights);
+
+//     const PHOTO_MIN_SEC = Number(process.env.PHOTO_MIN_SEC || 4);
+//     const PHOTO_MAX_SEGMENT_SHARE = Number(process.env.PHOTO_MAX_SHARE || 0.95);
+//     const PHOTO_LEADIN_SEC = Number(process.env.PHOTO_LEADIN_SEC || 0.05);
+
+//     const spotlightTotal = Math.min(
+//       dur * PHOTO_MAX_SEGMENT_SHARE,
+//       Math.max(PHOTO_MIN_SEC * maxSpotlights, PHOTO_MIN_SEC)
+//     );
+
+//     const slot = spotlightTotal / maxSpotlights;
+//     const startOffset = Math.min(PHOTO_LEADIN_SEC, dur * 0.10);
+
+//     for (let i = 0; i < maxSpotlights; i++) {
+//       const inputIndex = i + 1;
+//       const st = Math.min(dur - 0.2, startOffset + i * slot);
+//       const en = Math.min(dur, st + slot);
+
+//       const fadeIn = Math.min(0.25, (en - st) * 0.25);
+//       const fadeOut = Math.min(0.25, (en - st) * 0.25);
+
+//       const frames = Math.max(24, Math.round((en - st) * 30));
+
+//       filters.push(
+//         `[${inputIndex}:v]` +
+//         `scale=2400:-1:force_original_aspect_ratio=increase,` +
+//         `zoompan=` +
+//           `z='min(zoom+0.0012,1.12)':` +
+//           `x='iw/2-(iw/zoom/2)':` +
+//           `y='ih/2-(ih/zoom/2)':` +
+//           `d=${frames}:` +
+//           `s=1080x1920:` +
+//           `fps=30,` +
+//         `format=rgba,` +
+//         `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+//         `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+//       );
+
+//       filters.push(`[sp${i}]setpts=PTS+${st.toFixed(3)}/TB[sp${i}t]`);
+
+//       filters.push(
+//         `[${lastLabel}][sp${i}t]overlay=0:0:enable=between(t\\,${st.toFixed(3)}\\,${en.toFixed(3)})[v${i}]`
+//       );
+
+//       lastLabel = `v${i}`;
+//     }
+//   }
+
+//   filters.push(`[${lastLabel}]null[vout]`);
+//   const filtergraph = filters.join(';');
+
+//   await new Promise((resolve, reject) => {
+//     cmd
+//       .outputOptions([
+//         '-t', String(dur),
+//         '-filter_complex', filtergraph,
+//         '-map', '[vout]',
+//         '-c:v', 'libx264',
+//         '-preset', 'ultrafast',
+//         '-crf', '30',
+//         '-pix_fmt', 'yuv420p',
+//         '-an',
+//         '-movflags', '+faststart',
+//       ])
+//       .output(outPath)
+//       .on('end', resolve)
+//       .on('error', (err, _stdout, stderr) => reject(new Error(stderr || err.message)))
+//       .run();
+//   });
+// }
+
 async function createSegmentClip({
   bgVideoPath,
   overlayPhotoPaths,
@@ -817,73 +1002,95 @@ async function createSegmentClip({
   }
 
   const dur = Math.max(0.8, Number(durationSec || 0.8));
-  const photos = Array.isArray(overlayPhotoPaths) ? overlayPhotoPaths.filter(p => p && fs.existsSync(p)) : [];
+  const photos = Array.isArray(overlayPhotoPaths)
+    ? overlayPhotoPaths.filter(p => p && fs.existsSync(p))
+    : [];
   const numPhotos = photos.length;
 
   const cmd = ffmpeg()
     .input(bgVideoPath)
-    .inputOptions(['-stream_loop', '10']);
+    .inputOptions(['-stream_loop', '10']); // loop background long enough
 
+  // add all photos as inputs (we’ll only “spotlight” the first 1–2)
   for (const p of photos) {
     cmd.input(p).inputOptions(['-loop', '1']);
   }
 
   const filters = [];
 
+  // Background: fill the screen, moving video visible from the beginning
   filters.push(
     `[0:v]` +
-    `scale=1080:1920:force_original_aspect_ratio=increase,` +
-    `crop=1080:1920,` +
-    `setsar=1,fps=30,format=yuv420p,trim=0:${dur.toFixed(3)},setpts=PTS-STARTPTS[base]`
+      `scale=1080:1920:force_original_aspect_ratio=increase,` +
+      `crop=1080:1920,` +
+      `setsar=1,fps=30,format=yuv420p,` +
+      `trim=0:${dur.toFixed(3)},setpts=PTS-STARTPTS[base]`
   );
 
   let lastLabel = 'base';
 
+  // ✅ NEW BEHAVIOR: photo(s) appear at the END of the segment (ad-like “lock-in”)
   if (numPhotos > 0) {
     let maxSpotlights = Math.min(numPhotos, 2);
     if (dur < 3.8 && maxSpotlights === 2) maxSpotlights = 1;
 
+    // We only spotlight the first N photos (respects user ordering)
     const picked = photos.slice(0, maxSpotlights);
 
-    const PHOTO_MIN_SEC = Number(process.env.PHOTO_MIN_SEC || 3);
-    const PHOTO_MAX_SEGMENT_SHARE = Number(process.env.PHOTO_MAX_SHARE || 0.92);
-    const PHOTO_LEADIN_SEC = Number(process.env.PHOTO_LEADIN_SEC || 0.08);
+    // Tuning knobs
+    const PHOTO_MIN_SEC = Number(process.env.PHOTO_MIN_SEC || 4);        // minimum per photo, but clamped by segment length
+    const PHOTO_MAX_SEGMENT_SHARE = Number(process.env.PHOTO_MAX_SHARE || 0.95); // don’t cover the whole segment
+    const PHOTO_TAIL_SEC = Number(process.env.PHOTO_TAIL_SEC || 0);      // optional: force EXACT tail duration (0 = auto)
 
-    const spotlightTotal = Math.min(
+    // How much total time can photos occupy in this segment?
+    let spotlightTotal = Math.min(
       dur * PHOTO_MAX_SEGMENT_SHARE,
       Math.max(PHOTO_MIN_SEC * maxSpotlights, PHOTO_MIN_SEC)
     );
 
+    // If you want “always last X seconds”, set PHOTO_TAIL_SEC > 0
+    if (PHOTO_TAIL_SEC > 0) {
+      spotlightTotal = Math.min(spotlightTotal, Math.max(0.9, PHOTO_TAIL_SEC));
+    }
+
+    // Put the spotlight block at the END of the segment
+    const startOffset = Math.max(0, dur - spotlightTotal);
     const slot = spotlightTotal / maxSpotlights;
-    const startOffset = Math.min(PHOTO_LEADIN_SEC, dur * 0.10);
 
     for (let i = 0; i < maxSpotlights; i++) {
+      // IMPORTANT: input index is 1..N because 0 is bg video
       const inputIndex = i + 1;
-      const st = Math.min(dur - 0.2, startOffset + i * slot);
+
+      const st = Math.max(0, Math.min(dur - 0.05, startOffset + i * slot));
       const en = Math.min(dur, st + slot);
 
-      const fadeIn = Math.min(0.25, (en - st) * 0.25);
-      const fadeOut = Math.min(0.25, (en - st) * 0.25);
+      // Fade-in is good; fade-out can be tiny or zero because we cut to next segment anyway
+      const fadeIn = Math.min(0.22, (en - st) * 0.22);
+      const fadeOut = Number(process.env.PHOTO_FADEOUT_SEC || 0.06); // small tail fade to avoid harsh cut
 
       const frames = Math.max(24, Math.round((en - st) * 30));
 
+      // Fullscreen “Ken Burns” photo (zoom) that fills 1080x1920
       filters.push(
         `[${inputIndex}:v]` +
-        `scale=2400:-1:force_original_aspect_ratio=increase,` +
-        `zoompan=` +
-          `z='min(zoom+0.0012,1.12)':` +
-          `x='iw/2-(iw/zoom/2)':` +
-          `y='ih/2-(ih/zoom/2)':` +
-          `d=${frames}:` +
-          `s=1080x1920:` +
-          `fps=30,` +
-        `format=rgba,` +
-        `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
-        `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+          `scale=2400:-1:force_original_aspect_ratio=increase,` +
+          `zoompan=` +
+            `z='min(zoom+0.0012,1.12)':` +
+            `x='iw/2-(iw/zoom/2)':` +
+            `y='ih/2-(ih/zoom/2)':` +
+            `d=${frames}:` +
+            `s=1080x1920:` +
+            `fps=30,` +
+          `format=rgba,` +
+          `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+          // fade-out near end of the spotlight clip (relative time inside this stream)
+          `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
       );
 
+      // Shift the photo stream to start at absolute time "st"
       filters.push(`[sp${i}]setpts=PTS+${st.toFixed(3)}/TB[sp${i}t]`);
 
+      // Overlay fullscreen (0:0) only during [st, en]
       filters.push(
         `[${lastLabel}][sp${i}t]overlay=0:0:enable=between(t\\,${st.toFixed(3)}\\,${en.toFixed(3)})[v${i}]`
       );
@@ -914,6 +1121,7 @@ async function createSegmentClip({
       .run();
   });
 }
+
 
 async function createVideoFromSmartPlan({
   smartPlan,
@@ -965,6 +1173,9 @@ async function createVideoFromSmartPlan({
     vMap = '[vsub]';
   }
 
+  
+
+ 
   if (hasBg) {
     filters.push(
       `[1:a]volume=1.0[voice];` +
@@ -1086,12 +1297,15 @@ async function uploadTextToS3(text, jobId) {
 //   }
 // });
 
+//You are an AI video copywriter for IEndorse campaigns.
+
 function buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, voice, tone }) {
     return `
-You are an AI video copywriter for IEndorse campaigns.
+
+You are a News Broadcaster that deliver information, innovation, updates and breakthroughs.
 Write a short but punchy video script that ALWAYS includes the company name inside the video title using the details below.
 Voice Talent: ${voice || 'Default'}
-Tone: ${tone || 'Friendly'}
+Tone: ${tone || 'Professional'}
 
 Return JSON ONLY in the following format:
 {
@@ -1103,7 +1317,7 @@ Return JSON ONLY in the following format:
 
 Campaign Title (MUST include company name): ${campaignTitle || 'Untitled Campaign'}
 Campaign Description: ${campaignDescription || 'N/A'}
-Additional Context: ${scriptContext || 'N/A'}
+Additional Context: ${scriptContext || 'news, updates, information, innovation, breakthroughs'}
 `;
 }
 async function requestScriptFromOpenAI({ apiKey, campaignTitle, campaignDescription, scriptContext, voice, tone, accountId, pool }) {
