@@ -605,15 +605,18 @@ function buildSegmentedScriptPrompt({ campaignTitle, campaignDescription, script
   ];
   
   const isNews = newsCategories.some(cat => 
-    (category || '').toLowerCase().includes(cat) ||
     (campaignTitle || '').toLowerCase().includes('news') ||
     (campaignTitle || '').toLowerCase().includes('update') ||
+    (category || '').toLowerCase().includes(cat) ||
     (campaignDescription || '').toLowerCase().includes('breaking')
   );
 
+  console.log('campaignTitle:', campaignTitle);
+  
   if (isNews) {
-    // NEWS PROMPT
-    return `
+    console.log('Segmented script prompt: Detected NEWS content.');
+    return {
+      prompt: `
 You are a professional broadcast news writer creating scripts for video news segments similar to CNN, BBC, or Reuters.
 
 Return JSON ONLY:
@@ -643,10 +646,12 @@ Category: ${category || 'breaking news'}
 News Title: ${campaignTitle || 'Breaking News'}
 News Description: ${campaignDescription || 'N/A'}
 Additional Context: ${scriptContext || 'N/A'}
-`;
+`,
+      isNews: true
+    };
   } else {
-    // MARKETING PROMPT
-    return `
+    return {
+      prompt: `
 You are a campaign copywriter for small and medium business owners.
 
 Return JSON ONLY:
@@ -668,18 +673,22 @@ Category: ${category || 'general'}
 Campaign Title: ${campaignTitle || 'Untitled Campaign'}
 Campaign Description: ${campaignDescription || 'N/A'}
 Additional Context: ${scriptContext || 'N/A'}
-`;
+`,
+      isNews: false
+    };
   }
 }
 
 async function generateSegmentedScript({ apiKey, payload }) {
   const openai = new OpenAI({ apiKey });
 
+  const promptResult = buildSegmentedScriptPrompt(payload); // ✅ Create promptResult variable
+
   const r = await openai.chat.completions.create({
     model: process.env.SCRIPT_MODEL || 'gpt-4o-mini',
     messages: [
       { role: 'system', content: 'Return JSON only. No markdown. No commentary.' },
-      { role: 'user', content: buildSegmentedScriptPrompt(payload) },
+      { role: 'user', content: promptResult.prompt }, // ✅ Use promptResult.prompt
     ],
     temperature: 0.7,
   });
@@ -695,9 +704,9 @@ async function generateSegmentedScript({ apiKey, payload }) {
     title: String(json.title || '').trim(),
     description: String(json.description || '').trim(),
     segments,
+    isNews: promptResult.isNews  // ✅ Now this works
   };
 }
-
 /* ============================
    TTS per segment + concat
 ============================ */
@@ -1070,22 +1079,115 @@ async function createSegmentClip({
 
       const frames = Math.max(24, Math.round((en - st) * 30));
 
-      // Fullscreen “Ken Burns” photo (zoom) that fills 1080x1920
-      filters.push(
-        `[${inputIndex}:v]` +
-          `scale=2400:-1:force_original_aspect_ratio=increase,` +
-          `zoompan=` +
-            `z='min(zoom+0.0012,1.12)':` +
-            `x='iw/2-(iw/zoom/2)':` +
-            `y='ih/2-(ih/zoom/2)':` +
-            `d=${frames}:` +
-            `s=1080x1920:` +
-            `fps=30,` +
-          `format=rgba,` +
-          `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
-          // fade-out near end of the spotlight clip (relative time inside this stream)
-          `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
-      );
+      // // Fullscreen “Ken Burns” photo (zoom) that fills 1080x1920
+      // filters.push(
+      //   `[${inputIndex}:v]` +
+      //     `scale=2400:-1:force_original_aspect_ratio=increase,` +
+      //     `zoompan=` +
+      //       `z='min(zoom+0.0012,1.12)':` +
+      //       `x='iw/2-(iw/zoom/2)':` +
+      //       `y='ih/2-(ih/zoom/2)':` +
+      //       `d=${frames}:` +
+      //       `s=1080x1920:` +
+      //       `fps=30,` +
+      //     `format=rgba,` +
+      //     `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+      //     // fade-out near end of the spotlight clip (relative time inside this stream)
+      //     `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+      // );
+
+
+//WORKING
+
+      // Photo overlay with Ken Burns effect (preserves aspect ratio, no distortion)
+// filters.push(
+//   `[${inputIndex}:v]` +
+//     // Scale to fit within frame while preserving aspect ratio
+//     `scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease,` +
+//     `zoompan=` +
+//       `z='min(zoom+0.0012,1.12)':` +
+//       `x='iw/2-(iw/zoom/2)':` +
+//       `y='ih/2-(ih/zoom/2)':` +
+//       `d=${frames}:` +
+//       `s=1080x1920:` + // This still outputs 1080x1920 canvas, but with transparency around the photo
+//       `fps=30,` +
+//     `format=rgba,` +
+//     `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+//     `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+// );
+
+// NEW
+
+// filters.push(
+//   `[${inputIndex}:v]` +
+//     `zoompan=` +
+//       `z='min(zoom+0.0012,1.12)':` +
+//       `x='iw/2-(iw/zoom/2)':` +
+//       `y='ih/2-(ih/zoom/2)':` +
+//       `d=${frames}:` +
+//       `s=1080x1920:` +
+//       `fps=30,` +
+//     `format=rgba,` +
+//     // Add padding to center the image if it doesn't fill 1080x1920
+//     `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black@0,` +
+//     `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+//     `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+// );
+
+///ORIGINAL SIZE NO ZOOM, JUST CENTERED WITH PADDING
+// filters.push(
+//   `[${inputIndex}:v]` +
+//     // Keep original size, just pad to canvas size
+//     `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,` +
+//     `zoompan=` +
+//       `z='1+0.0012*on':` + // Linear zoom
+//       `x='iw/2-(iw/zoom/2)':` +
+//       `y='ih/2-(ih/zoom/2)':` +
+//       `d=${frames}:` +
+//       `s=1080x1920:` +
+//       `fps=30,` +
+//     `format=rgba,` +
+//     `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+//     `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+// );
+
+
+
+filters.push(
+  `[${inputIndex}:v]` +
+    // Scale to fit within canvas while preserving aspect ratio
+    `scale='if(gt(iw/ih,1080/1920),1080,-2)':'if(gt(iw/ih,1080/1920),-2,1920)',` +
+    // Pad to exact canvas size BEFORE zoompan
+    `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,` +
+    `zoompan=` +
+      `z='1+0.0012*on':` + // Linear zoom
+      `x='iw/2-(iw/zoom/2)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${frames}:` +
+      `s=1080x1920:` +
+      `fps=30,` +
+    `format=rgba,` +
+    `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+    `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+);
+
+// Photo overlay - completely preserve original size, center on canvas
+// filters.push(
+//   `[${inputIndex}:v]` +
+//     `format=rgba,` +
+//     // Pad to 1080x1920 canvas, centering the photo
+//     `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black@0.0,` +
+//     `zoompan=` +
+//       `z='min(zoom+0.0012,1.12)':` +
+//       `x='iw/2-(iw/zoom/2)':` +
+//       `y='ih/2-(ih/zoom/2)':` +
+//       `d=${frames}:` +
+//       `s=1080x1920:` +
+//       `fps=30,` +
+//     `fade=t=in:st=0:d=${fadeIn.toFixed(3)}:alpha=1,` +
+//     `fade=t=out:st=${Math.max(0, (en - st) - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:alpha=1[sp${i}]`
+// );
+
 
       // Shift the photo stream to start at absolute time "st"
       filters.push(`[sp${i}]setpts=PTS+${st.toFixed(3)}/TB[sp${i}t]`);
@@ -1168,13 +1270,20 @@ async function createVideoFromSmartPlan({
   let vMap = '0:v';
   let aOut = '1:a';
 
-  if (subtitlesSrtPath && subtitleBurnIn) {
-    filters.push(`[0:v]subtitles='${subtitlesSrtPath.replace(/:/g, '\\:').replace(/'/g, "\\'")}'[vsub]`);
-    vMap = '[vsub]';
-  }
+  // if (subtitlesSrtPath && subtitleBurnIn) {
+  //   filters.push(`[0:v]subtitles='${subtitlesSrtPath.replace(/:/g, '\\:').replace(/'/g, "\\'")}'[vsub]`);
+  //   vMap = '[vsub]';
+  // }
 
   
-
+if (subtitlesSrtPath && subtitleBurnIn) {
+    // Custom subtitle styling: smaller font, better positioning
+  //  FontSize=18 - Make it smaller (try 16, 14, 12, etc.)
+//MarginV=80 - Distance from bottom (increase to move subtitles up)
+    const subtitleFilter = `[0:v]subtitles='${subtitlesSrtPath.replace(/:/g, '\\:').replace(/'/g, "\\'")}':force_style='FontSize=10,MarginV=10'[vsub]`;
+    filters.push(subtitleFilter);
+    vMap = '[vsub]';
+  }
  
   if (hasBg) {
     filters.push(
@@ -1304,6 +1413,7 @@ function buildScriptPrompt({ campaignTitle, campaignDescription, scriptContext, 
 
 You are a News Broadcaster that deliver information, innovation, updates and breakthroughs.
 Write a short but punchy video script that ALWAYS includes the company name inside the video title using the details below.
+Do not mention the tone or voice in the script.
 Voice Talent: ${voice || 'Default'}
 Tone: ${tone || 'Professional'}
 
@@ -1657,7 +1767,8 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
       scriptObj = await generateSegmentedScript({
         apiKey: openaiApiKey,
         payload: {
-          campaignTitle: inferredCampaignTitle,
+         campaignTitle: inferredCampaignTitle,
+        //  campaignTitle,
           campaignDescription,               // ✅ script is here
           scriptContext: inferredScriptContext,
           category: inferredCategorySlug,
@@ -1665,6 +1776,16 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
           tone
         }
       });
+
+      if (scriptObj.isNews) {
+  subtitles = true;
+  console.log('Subtitles automatically enabled for NEWS content');}
+
+  ////////////////////
+  if (scriptObj.title && scriptObj.title.trim()) {
+  inferredCampaignTitle = scriptObj.title.trim();
+  console.log('Updated campaignTitle to generated title:', inferredCampaignTitle);}
+
     }
     if (!scriptObj.segments?.length) throw new Error('No script segments available.');
 
@@ -1764,6 +1885,17 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
       cost: VIDEO_GENERATION_COST
     });
 
+
+    const hashtagString = inferredKeywords.length 
+  ? inferredKeywords.map(keyword => `#${keyword.replace(/\s+/g, '')}`).join(' ')
+  : '';
+
+// Combine description with hashtags (with two newline gaps)
+const fullCampaignDescription = scriptObj.description && hashtagString
+  ? `${scriptObj.description}\n\n${hashtagString}`
+  : scriptObj.description || hashtagString || '';
+
+
     return res.json({
       jobId: job.id,
       videoUrl,
@@ -1776,6 +1908,8 @@ router.post('/ai-video/generate-video', upload.none(), async (req, res) => {
       inferred: {
         campaignTitle: inferredCampaignTitle,
         scriptContext: inferredScriptContext,
+        campaignDescription: fullCampaignDescription, // ✅ Description + hashtags
+       //  campaignDescription: scriptObj.description || '', 
         keywords: inferredKeywords
       },
       script: scriptObj,
