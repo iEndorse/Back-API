@@ -14,6 +14,7 @@ const sql = require('mssql');
 const iendorseRoutes = require('./routes/endorse');
 const iendorseV1 = require('./routes/endorseV1');
 const promoteRoutes = require('./routes/promote');
+const getCampaignPlans = require('./routes/get-campaign-plans');
 const promoteRoutesai = require('./routes/promoteai');
 const engagementRoutes = require('./routes/engagement');
 const imageTextRoutes = require('./routes/imagetext');
@@ -292,6 +293,7 @@ app.use('/', ocrRoutes);
 app.use('/', ocropenaiRoutes);
 app.use('/', promoteRoutesai);
 app.use('/', aiVideoRoute);
+app.use('/', getCampaignPlans);  // Adds GET /api/campaign-plans
 
 module.exports = app;
 

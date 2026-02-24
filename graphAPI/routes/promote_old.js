@@ -47,16 +47,16 @@ const AD_ACCOUNT_ID  = process.env.AD_ACCOUNT_ID; // e.g. "act_123456789" — re
 const TEMP_DIR       = path.resolve('temp');
 
 /**
- * DEPRECATED: Promotion packages are now stored in CampaignSubscriptions table.
- * This constant is kept for reference only and is no longer used in the code.
- * Package costs are fetched dynamically from the database in the /promote-campaign route.
+ * Promotion package tiers mapped to their Naira point costs.
+ * Pricing accounts for Meta's minimum ad budget (₦1,363.68 in Nigeria).
+ * Update these values here if pricing changes — no other code needs to change.
  */
-// const PROMOTION_PACKAGES = {
-//     bronze:   1500,
-//     silver:   3000,
-//     gold:     5000,
-//     platinum: 10000,
-// };
+const PROMOTION_PACKAGES = {
+    bronze:   1500,   // ₦1,500 (meets Meta minimum)
+    silver:   3000,   // ₦3,000 (2x bronze)
+    gold:     5000,   // ₦5,000
+    platinum: 10000,  // ₦10,000 (2x gold)
+};
 
 /**
  * After any successful promotion we reset CampaignUnit to this value and
@@ -465,48 +465,23 @@ router.post('/promote-campaign', upload.none(), async (req, res) => {
         return res.status(500).json({ error: 'Server misconfiguration: OpenAI API key not available' });
     }
 
+    // Validate promotion package against known tiers
+    if (!PROMOTION_PACKAGES[promotionPackage]) {
+        return res.status(400).json({
+            error: `Invalid promotionPackage "${promotionPackage}". ` +
+                   `Must be one of: ${Object.keys(PROMOTION_PACKAGES).join(', ')}`,
+            packages: PROMOTION_PACKAGES,
+        });
+    }
+
+    const packageCost = PROMOTION_PACKAGES[promotionPackage]; // Naira WalletUnits to deduct
+
     // ── 2. Initialise shared resources ──────────────────────────────────────
     const pool   = req.app.locals.db;
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
     if (!pool) {
         return res.status(500).json({ error: 'Database connection is not available' });
-    }
-
-    // ── 2a. Fetch package cost from CampaignSubscriptions table ──────────────
-    // This keeps pricing in sync with the database instead of hardcoding it.
-    let packageCost = 0;
-    try {
-        const planResult = await pool.request()
-            .input('planUniqueId', sql.NVarChar, promotionPackage)
-            .query(`
-                SELECT CampaignPlanUnit, Amount
-                FROM   CampaignSubscriptions
-                WHERE  PlanUniqueId = @planUniqueId
-            `);
-
-        if (!planResult.recordset.length) {
-            return res.status(400).json({
-                error: `Invalid promotionPackage "${promotionPackage}". Package not found in CampaignSubscriptions table.`
-            });
-        }
-
-        packageCost = Number(planResult.recordset[0].CampaignPlanUnit) || 0;
-
-        if (packageCost === 0) {
-            return res.status(400).json({
-                error: `Invalid package configuration: ${promotionPackage} has zero cost.`
-            });
-        }
-
-        console.log(`[Promotion] Package "${promotionPackage}" costs ${packageCost.toLocaleString()} WalletUnits`);
-
-    } catch (err) {
-        console.error('[promote-campaign] Failed to fetch package cost from database:', err);
-        return res.status(500).json({
-            error: 'Failed to validate promotion package',
-            details: err.message
-        });
     }
 
     // All temp files collected here so the finally block can clean them up
