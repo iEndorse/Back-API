@@ -21,6 +21,7 @@ const imageTextRoutes = require('./routes/imagetext');
 const ocrRoutes = require('./routes/ocrRoutes');
 const ocropenaiRoutes = require('./routes/ocrOpenaiRoutes.js');
 const aiVideoRoute = require('./routes/AiVideo.js');
+const aiFlyerRouter = require('./routes/flyer-route.js'); 
 
 // CORS Configuration
 const allowedOrigins = [
@@ -294,6 +295,7 @@ app.use('/', ocropenaiRoutes);
 app.use('/', promoteRoutesai);
 app.use('/', aiVideoRoute);
 app.use('/', getCampaignPlans);  // Adds GET /api/campaign-plans
+app.use('/', aiFlyerRouter);
 
 module.exports = app;
 

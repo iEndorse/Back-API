@@ -14,6 +14,7 @@
     "@aws-sdk/client-rekognition": "^3.787.0",
     "@azure/cognitiveservices-computervision": "^8.2.0",
     "@azure/core-auth": "^1.9.0",
+    "@sparticuz/chromium": "^143.0.4",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.8.4",
     "cors": "^2.8.5",
@@ -28,8 +29,7 @@
     "openai": "^4.95.1",
     "path": "^0.12.7",
     "playwright-firefox": "^1.52.0",
-    "puppeteer": "^24.6.1",
-    "puppeteer-core": "^24.6.1",
+    "puppeteer-core": "^24.38.0",
     "serverless-http": "^4.0.0",
     "tesseract.js": "^6.0.1"
   },
